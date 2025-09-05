@@ -5,7 +5,7 @@ let currentProblemURL = window.location.href;
 let myChart = null;
 
 console.log(
-  "LeetCode AI Mentor: content.js script is active (v9.0 - Final Version)."
+  "LeetCode AI Mentor: content.js script is active (v9.1 - Final Version)."
 );
 
 // --- STORAGE HELPER FUNCTIONS ---
@@ -279,25 +279,37 @@ async function sendMessageToAI() {
     input.value = "";
     loadingMessage = addMessageToChat("ai", "", true);
 
-    // Always construct the user's message with full context if the chat history is empty
-    let promptToSend = userQuery;
-    if (chatHistory.length === 0) {
+    // This is the clean message for the UI and persistent history
+    const userMessageForHistory = {
+      role: "user",
+      parts: [{ text: userQuery }],
+    };
+    chatHistory.push(userMessageForHistory);
+
+    let historyForAPI = [...chatHistory];
+
+    // If this is the first user message, prepend the full context to the API request
+    if (chatHistory.filter((m) => m.role === "user").length === 1) {
       const context = getProblemContext();
       const systemPrompt = `You are an expert LeetCode programming mentor. Your goal is to help users solve problems without giving them the direct answer. Stay strictly on the topic of the provided LeetCode problem. Do not provide the full code solution. Instead, guide the user with hints and Socratic questions.`;
-      promptToSend = `CONTEXT:\n- Problem: ${
+
+      const fullContextPrompt = `CONTEXT:\n- Problem: ${
         context.problemTitle
       }\n- Description: ${context.problemDescription}\n- My Code: ${
         context.userCode || "None"
       }\n\nINSTRUCTIONS:\n- ${systemPrompt}\n\nMY QUESTION:\n- ${userQuery}`;
-    }
 
-    chatHistory.push({ role: "user", parts: [{ text: promptToSend }] });
-    await saveChatHistory();
+      // Replace the simple user query with the full context prompt FOR THE API ONLY
+      historyForAPI[historyForAPI.length - 1] = {
+        role: "user",
+        parts: [{ text: fullContextPrompt }],
+      };
+    }
 
     messageCounter++;
     const shouldRequestRecommendations = messageCounter >= 3;
 
-    const requestBody = { contents: chatHistory }; // Send the complete history
+    const requestBody = { contents: historyForAPI };
 
     const aiResponseText = await callGeminiAPI(geminiApiKey, requestBody);
 
@@ -313,6 +325,13 @@ async function sendMessageToAI() {
       messageCounter = 0;
     }
   } catch (error) {
+    // If an error occurs, remove the user's last message from history to prevent issues
+    if (
+      chatHistory.length > 0 &&
+      chatHistory[chatHistory.length - 1].role === "user"
+    ) {
+      chatHistory.pop();
+    }
     console.error("Error fetching AI response:", error);
     if (loadingMessage) loadingMessage.remove();
     addMessageToChat("ai", `Sorry, an error occurred. ${error.message}`);
@@ -529,14 +548,12 @@ function makeDraggable(element, handle) {
     document.onmousemove = null;
   }
 }
-
 function resetChatState() {
   console.log("AI Mentor: Resetting in-memory chat state.");
-  chatHistory = []; // Clear in-memory history
+  chatHistory = [];
   const messagesContainer = document.getElementById("ai-chat-messages");
   if (messagesContainer) messagesContainer.innerHTML = "";
 }
-
 async function handleSuccessfulSubmission() {
   console.log("Success detected!");
   const { geminiApiKey } = await LocalStorage.get("geminiApiKey");
@@ -580,7 +597,6 @@ function addSubmitListener() {
     });
   }
 }
-
 const mainObserver = new MutationObserver(async () => {
   const hookSelector = 'div[data-track-load="description_content"]';
   const hookElement = document.querySelector(hookSelector);
