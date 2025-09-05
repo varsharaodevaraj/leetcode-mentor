@@ -1,22 +1,24 @@
-// Global variable to hold the chat history for the current problem
+// Global variables
 let chatHistory = [];
+let messageCounter = 0;
+let currentProblemURL = window.location.href;
+
+console.log("LeetCode AI Mentor: content.js script is active.");
 
 // Function to scrape problem details from the LeetCode page
 function getProblemContext() {
-    // These selectors are specific to LeetCode's current layout.
-    // They might need updating if LeetCode changes its website structure.
-    const titleSelector = '.text-title-large a';
+    const titleSelector = 'div[data-cy="question-title"]';
     const descriptionSelector = 'div[data-track-load="description_content"]';
-    const codeEditorSelector = '.monaco-editor';
-
+    
     const titleEl = document.querySelector(titleSelector);
     const descriptionEl = document.querySelector(descriptionSelector);
-    const codeEditorEl = document.querySelector(codeEditorSelector);
 
-    // This is a more advanced way to get the code from the Monaco editor instance
     let userCode = "Could not read code from editor.";
-    if (codeEditorEl && codeEditorEl.env && codeEditorEl.env.editor) {
-        userCode = codeEditorEl.env.editor.getValue();
+    if (window.monaco && window.monaco.editor) {
+        const models = window.monaco.editor.getModels();
+        if (models.length > 0) {
+            userCode = models[0].getValue();
+        }
     }
 
     return {
@@ -26,9 +28,11 @@ function getProblemContext() {
     };
 }
 
-// Function to add a message to the chat UI
+// Function to add a regular message to the chat UI
 function addMessageToChat(sender, message, isLoading = false) {
     const messagesContainer = document.getElementById('ai-chat-messages');
+    if (!messagesContainer) return null;
+
     const messageDiv = document.createElement('div');
     messageDiv.classList.add('ai-chat-message', sender === 'user' ? 'user-message' : 'ai-message');
     
@@ -36,55 +40,76 @@ function addMessageToChat(sender, message, isLoading = false) {
         messageDiv.classList.add('loading');
         messageDiv.textContent = 'Thinking...';
     } else {
-        // Sanitize and render message (basic markdown for code blocks)
+        message = message.replace(/</g, "&lt;").replace(/>/g, "&gt;");
         messageDiv.innerHTML = message.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>');
     }
     
     messagesContainer.appendChild(messageDiv);
-    messagesContainer.scrollTop = messagesContainer.scrollHeight; // Auto-scroll to bottom
-    return messageDiv; // Return the element to update it later if needed
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    return messageDiv;
+}
+
+// Function to add the special recommendation message
+function addRecommendationMessageToChat(recommendations) {
+    const messagesContainer = document.getElementById('ai-chat-messages');
+    if (!messagesContainer || recommendations.length === 0) return;
+
+    const tipDiv = document.createElement('div');
+    tipDiv.classList.add('ai-chat-message', 'mentor-tip');
+
+    let htmlContent = `<strong>Mentor Tip:</strong> To strengthen your skills in this area, you might want to try these problems:<ul>`;
+    recommendations.forEach(rec => {
+        htmlContent += `<li><a href="${rec.url}" target="_blank">${rec.title}</a></li>`;
+    });
+    htmlContent += `</ul>`;
+
+    tipDiv.innerHTML = htmlContent;
+    messagesContainer.appendChild(tipDiv);
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
 
 // Function to send data to the backend and get AI response
 async function sendMessageToAI() {
     const input = document.getElementById('ai-chat-input');
+    if (!input) return;
     const userQuery = input.value.trim();
 
     if (!userQuery) return;
 
-    // Display user's message immediately
+    messageCounter++;
     addMessageToChat('user', userQuery);
     chatHistory.push({ role: "user", parts: [{ text: userQuery }] });
     input.value = '';
 
-    // Show a loading indicator
-    const loadingMessage = addMessageToChat('ai', '', true);
+    const loadingMessage = addMessageToChat('ai', '', true); // Corrected typo here
+    const shouldRequestRecommendations = messageCounter >= 3;
 
     try {
         const context = getProblemContext();
         
         const response = await fetch('http://localhost:3000/api/chat', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 ...context,
                 userQuery: userQuery,
-                chatHistory: chatHistory.slice(0, -1) // Send history *before* the current query
+                chatHistory: chatHistory.slice(0, -1),
+                getRecommendations: shouldRequestRecommendations
             }),
         });
 
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
 
         const data = await response.json();
         
-        // Remove loading indicator and display the actual AI response
         loadingMessage.remove();
         addMessageToChat('ai', data.response);
         chatHistory.push({ role: "model", parts: [{ text: data.response }] });
+
+        if (data.recommendations && data.recommendations.length > 0) {
+            addRecommendationMessageToChat(data.recommendations);
+            messageCounter = 0;
+        }
 
     } catch (error) {
         console.error('Error fetching AI response:', error);
@@ -95,108 +120,80 @@ async function sendMessageToAI() {
 
 // Function to create the chat UI and inject it into the page
 function createChatUI() {
-    // --- Main Button ---
+    if (document.getElementById('ai-mentor-btn')) return;
+    console.log("AI Mentor: Hook element found! Creating UI...");
+
     const mentorButton = document.createElement('button');
     mentorButton.id = 'ai-mentor-btn';
     mentorButton.innerHTML = '🤖';
     document.body.appendChild(mentorButton);
 
-    // --- Chat Container ---
     const chatContainer = document.createElement('div');
     chatContainer.id = 'ai-chat-container';
-    chatContainer.style.display = 'none'; // Initially hidden
+    chatContainer.style.display = 'none';
 
-    // --- Header ---
-    const chatHeader = document.createElement('div');
-    chatHeader.id = 'ai-chat-header';
-    chatHeader.textContent = 'LeetCode AI Mentor';
-    chatContainer.appendChild(chatHeader);
-
-    // --- Messages Area ---
-    const messages = document.createElement('div');
-    messages.id = 'ai-chat-messages';
-    chatContainer.appendChild(messages);
-
-    // --- Input Area ---
-    const inputContainer = document.createElement('div');
-    inputContainer.id = 'ai-chat-input-container';
-    
-    const input = document.createElement('input');
-    input.id = 'ai-chat-input';
-    input.type = 'text';
-    input.placeholder = 'Ask a hint...';
-    input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-            sendMessageToAI();
-        }
-    });
-
-    const sendButton = document.createElement('button');
-    sendButton.id = 'ai-chat-send-btn';
-    sendButton.textContent = 'Send';
-    sendButton.onclick = sendMessageToAI;
-
-    inputContainer.appendChild(input);
-    inputContainer.appendChild(sendButton);
-    chatContainer.appendChild(inputContainer);
-
+    chatContainer.innerHTML = `
+        <div id="ai-chat-header">LeetCode AI Mentor</div>
+        <div id="ai-chat-messages"></div>
+        <div id="ai-chat-input-container">
+            <input id="ai-chat-input" type="text" placeholder="Ask a hint...">
+            <button id="ai-chat-send-btn">Send</button>
+        </div>
+    `;
     document.body.appendChild(chatContainer);
 
-    // --- Event Listeners ---
+    const sendButton = document.getElementById('ai-chat-send-btn');
+    const input = document.getElementById('ai-chat-input');
+    const header = document.getElementById('ai-chat-header');
+    
     mentorButton.addEventListener('click', () => {
         chatContainer.style.display = chatContainer.style.display === 'none' ? 'flex' : 'none';
     });
 
-    // Make the chatbox draggable
-    makeDraggable(chatContainer, chatHeader);
+    sendButton.onclick = sendMessageToAI;
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendMessageToAI(); });
+
+    makeDraggable(chatContainer, header);
 }
 
 // Utility function to make an element draggable
 function makeDraggable(element, handle) {
     let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
     handle.onmousedown = dragMouseDown;
-
-    function dragMouseDown(e) {
-        e.preventDefault();
-        pos3 = e.clientX;
-        pos4 = e.clientY;
-        document.onmouseup = closeDragElement;
-        document.onmousemove = elementDrag;
-    }
-
-    function elementDrag(e) {
-        e.preventDefault();
-        pos1 = pos3 - e.clientX;
-        pos2 = pos4 - e.clientY;
-        pos3 = e.clientX;
-        pos4 = e.clientY;
-        element.style.top = (element.offsetTop - pos2) + "px";
-        element.style.left = (element.offsetLeft - pos1) + "px";
-    }
-
-    function closeDragElement() {
-        document.onmouseup = null;
-        document.onmousemove = null;
-    }
+    function dragMouseDown(e) { e.preventDefault(); pos3 = e.clientX; pos4 = e.clientY; document.onmouseup = closeDragElement; document.onmousemove = elementDrag; }
+    function elementDrag(e) { e.preventDefault(); pos1 = pos3 - e.clientX; pos2 = pos4 - e.clientY; pos3 = e.clientX; pos4 = e.clientY; element.style.top = (element.offsetTop - pos2) + "px"; element.style.left = (element.offsetLeft - pos1) + "px"; }
+    function closeDragElement() { document.onmouseup = null; document.onmousemove = null; }
 }
 
-// Main execution logic
-// We use a MutationObserver to wait for the LeetCode UI to be fully loaded
-// This is more robust than a simple setTimeout
-const observer = new MutationObserver((mutations, obs) => {
-    const targetNode = document.querySelector('.text-title-large');
-    if (targetNode) {
-        if (!document.getElementById('ai-mentor-btn')) {
-            console.log("LeetCode AI Mentor: UI ready, injecting chat.");
-            createChatUI();
-        }
-        // Once the UI is injected, we could disconnect, but let's keep it
-        // in case of single-page navigations that might remove our button.
-        // obs.disconnect(); 
+// Function to reset the chat state for a new problem
+function resetChatState() {
+    console.log("AI Mentor: Navigated to a new problem. Resetting chat state.");
+    chatHistory = [];
+    messageCounter = 0;
+    const messagesContainer = document.getElementById('ai-chat-messages');
+    if (messagesContainer) { messagesContainer.innerHTML = ''; }
+}
+
+// Main execution logic using MutationObserver for reliability
+const observer = new MutationObserver(() => {
+    // 1. Check for navigation
+    if (window.location.href !== currentProblemURL) {
+        currentProblemURL = window.location.href;
+        resetChatState();
+    }
+    
+    // 2. Check for the reliable hook element you found
+    const hookSelector = 'div[data-track-load="description_content"]';
+    const hookElement = document.querySelector(hookSelector);
+    
+    // 3. If the element exists, inject the UI and STOP observing
+    if (hookElement) {
+        console.log(`AI Mentor: Found the hook element ("${hookSelector}").`);
+        createChatUI();
+        observer.disconnect(); // We're done, no need to keep checking
+        console.log("AI Mentor: Observer disconnected after successful injection.");
     }
 });
 
-observer.observe(document.body, {
-    childList: true,
-    subtree: true
-});
+console.log("AI Mentor: Starting observer to watch for page changes...");
+observer.observe(document.body, { childList: true, subtree: true });
