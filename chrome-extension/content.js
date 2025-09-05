@@ -2,10 +2,10 @@
 let chatHistory = [];
 let messageCounter = 0;
 let currentProblemURL = window.location.href;
-let myChart = null; // For the mastery chart
+let myChart = null;
 
 console.log(
-  "LeetCode AI Mentor: content.js script is active (v6.1 - Final Version)."
+  "LeetCode AI Mentor: content.js script is active (v9.0 - Final Version)."
 );
 
 // --- STORAGE HELPER FUNCTIONS ---
@@ -35,7 +35,6 @@ async function saveSolvedProblem(problemTitle, topic) {
   ) {
     solvedProblems.push({ title: problemTitle, topic: topic.trim() });
     await LocalStorage.set({ solvedProblems });
-    console.log(`Saved "${problemTitle}" under topic "${topic.trim()}"`);
   }
 }
 async function saveReviewItems(concept, problems, sourceProblem) {
@@ -59,7 +58,6 @@ async function setNotificationStatus(hasNotification) {
   await LocalStorage.set({ hasNotification });
   updateNotificationDot();
 }
-
 async function updateNotificationDot() {
   const { reviewList } = await LocalStorage.get("reviewList");
   const mentorButton = document.getElementById("ai-mentor-btn");
@@ -79,6 +77,33 @@ async function updateNotificationDot() {
   } else {
     mentorButton.classList.remove("has-notification");
     icon.removeAttribute("data-notification-count");
+  }
+}
+
+// --- Chat History Management ---
+function getProblemKeyFromURL(url) {
+  const match = url.match(/leetcode\.com\/problems\/([^/]+)/);
+  return match ? `chatHistory_${match[1]}` : null;
+}
+async function saveChatHistory() {
+  const problemKey = getProblemKeyFromURL(window.location.href);
+  if (problemKey) {
+    await LocalStorage.set({ [problemKey]: chatHistory });
+  }
+}
+async function loadChatHistory() {
+  const problemKey = getProblemKeyFromURL(window.location.href);
+  if (problemKey) {
+    const { [problemKey]: savedHistory } = await LocalStorage.get(problemKey);
+    chatHistory = savedHistory || [];
+    const messagesContainer = document.getElementById("ai-chat-messages");
+    if (messagesContainer) {
+      messagesContainer.innerHTML = "";
+      chatHistory.forEach((message) => {
+        const sender = message.role === "user" ? "user" : "ai";
+        addMessageToChat(sender, message.parts[0].text);
+      });
+    }
   }
 }
 
@@ -134,8 +159,6 @@ function addMessageToChat(sender, message, isLoading = false) {
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
   return messageDiv;
 }
-
-// UPDATED: renderReviewList with smarter "Mark as Done"
 async function renderReviewList() {
   const panel = document.getElementById("ai-review-list-panel");
   if (!panel) return;
@@ -147,7 +170,9 @@ async function renderReviewList() {
   }
   const topics = {};
   reviewList.forEach((item) => {
-    if (!topics[item.concept]) topics[item.concept] = [];
+    if (!topics[item.concept]) {
+      topics[item.concept] = [];
+    }
     item.problems.forEach((problem) => {
       if (!topics[item.concept].some((p) => p.url === problem.url)) {
         topics[item.concept].push(problem);
@@ -180,26 +205,21 @@ async function renderReviewList() {
     button.addEventListener("click", async (e) => {
       e.stopPropagation();
       const { url: urlToRemove, title, concept } = e.target.dataset;
-
-      // 1. Add to solved list
       await saveSolvedProblem(title, concept);
-
-      // 2. Remove from review list
       let { reviewList } = await LocalStorage.get("reviewList");
       let updatedReviewList = [];
       reviewList.forEach((item) => {
         item.problems = item.problems.filter((p) => p.url !== urlToRemove);
-        if (item.problems.length > 0) updatedReviewList.push(item);
+        if (item.problems.length > 0) {
+          updatedReviewList.push(item);
+        }
       });
       await LocalStorage.set({ reviewList: updatedReviewList });
-
-      // 3. Re-render and update notification
       renderReviewList();
       updateNotificationDot();
     });
   });
 }
-
 async function callGeminiAPI(apiKey, requestBody) {
   const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
   const response = await fetch(API_URL, {
@@ -220,10 +240,7 @@ async function getRecommendations(apiKey, problemTitle) {
   if (problemTitle === "Title not found") return;
   try {
     addMessageToChat("ai", "Analyzing problem for related topics...", true);
-    const conceptPrompt = `Based on LeetCode problem "${problemTitle}", what is the primary algorithmic concept? Respond with ONLY the concept name.`;
-    const concept = await callGeminiAPI(apiKey, {
-      contents: [{ parts: [{ text: conceptPrompt }] }],
-    });
+    const concept = await getTopicForProblem(apiKey, problemTitle);
     const recommendationPrompt = `List 2-3 classic LeetCode problems for practicing "${concept.trim()}", excluding "${problemTitle}". Provide response as a valid JSON array of objects with "title" and "url" keys. Respond with ONLY the JSON array.`;
     const recoResponse = await callGeminiAPI(apiKey, {
       contents: [{ parts: [{ text: recommendationPrompt }] }],
@@ -240,6 +257,8 @@ async function getRecommendations(apiKey, problemTitle) {
     if (loadingMessage) loadingMessage.remove();
   }
 }
+
+// --- UPDATED: sendMessageToAI with final context fix ---
 async function sendMessageToAI() {
   const input = document.getElementById("ai-chat-input");
   if (!input) return;
@@ -255,32 +274,41 @@ async function sendMessageToAI() {
       );
       return;
     }
+
     addMessageToChat("user", userQuery);
     input.value = "";
     loadingMessage = addMessageToChat("ai", "", true);
+
+    // Always construct the user's message with full context if the chat history is empty
+    let promptToSend = userQuery;
+    if (chatHistory.length === 0) {
+      const context = getProblemContext();
+      const systemPrompt = `You are an expert LeetCode programming mentor. Your goal is to help users solve problems without giving them the direct answer. Stay strictly on the topic of the provided LeetCode problem. Do not provide the full code solution. Instead, guide the user with hints and Socratic questions.`;
+      promptToSend = `CONTEXT:\n- Problem: ${
+        context.problemTitle
+      }\n- Description: ${context.problemDescription}\n- My Code: ${
+        context.userCode || "None"
+      }\n\nINSTRUCTIONS:\n- ${systemPrompt}\n\nMY QUESTION:\n- ${userQuery}`;
+    }
+
+    chatHistory.push({ role: "user", parts: [{ text: promptToSend }] });
+    await saveChatHistory();
+
     messageCounter++;
     const shouldRequestRecommendations = messageCounter >= 3;
-    const context = getProblemContext();
-    const systemPrompt = `You are an expert LeetCode programming mentor...`;
-    const requestBody = {
-      contents: [
-        ...chatHistory,
-        {
-          role: "user",
-          parts: [
-            {
-              text: `System instruction: ${systemPrompt}\nProblem: ${context.problemTitle}\nMy Code: ${context.userCode}\nMy Question: ${userQuery}`,
-            },
-          ],
-        },
-      ],
-    };
+
+    const requestBody = { contents: chatHistory }; // Send the complete history
+
     const aiResponseText = await callGeminiAPI(geminiApiKey, requestBody);
+
     if (loadingMessage) loadingMessage.remove();
     addMessageToChat("ai", aiResponseText);
-    chatHistory.push({ role: "user", parts: [{ text: userQuery }] });
+
     chatHistory.push({ role: "model", parts: [{ text: aiResponseText }] });
+    await saveChatHistory();
+
     if (shouldRequestRecommendations) {
+      const context = getProblemContext();
       await getRecommendations(geminiApiKey, context.problemTitle);
       messageCounter = 0;
     }
@@ -290,6 +318,7 @@ async function sendMessageToAI() {
     addMessageToChat("ai", `Sorry, an error occurred. ${error.message}`);
   }
 }
+
 async function renderAnalytics() {
   const panel = document.getElementById("ai-analytics-panel");
   if (!panel) return;
@@ -427,16 +456,20 @@ function createMainButton() {
       showSetupModal();
     } else {
       hideSetupModal();
-      if (!chatContainer) createChatUI();
-      const chatUI = document.getElementById("ai-chat-container");
-      chatUI.style.display = chatUI.style.display === "none" ? "flex" : "none";
+      if (!chatContainer) {
+        createChatUI();
+      } else {
+        const chatUI = document.getElementById("ai-chat-container");
+        chatUI.style.display =
+          chatUI.style.display === "none" ? "flex" : "none";
+      }
     }
   });
 }
 function createChatUI() {
   const chatContainer = document.createElement("div");
   chatContainer.id = "ai-chat-container";
-  chatContainer.style.display = "none";
+  chatContainer.style.display = "flex";
   chatContainer.innerHTML = `<div id="ai-chat-header">LeetCode AI Mentor</div><div id="ai-chat-tabs"><div class="ai-chat-tab active" data-tab="chat">Chat</div><div class="ai-chat-tab" data-tab="review">My Review List</div><div class="ai-chat-tab" data-tab="analytics">Analytics</div></div><div class="ai-chat-panel active" id="ai-chat-panel"><div id="ai-chat-messages"></div><div id="ai-chat-input-container"><input id="ai-chat-input" type="text" placeholder="Ask a hint..."><button id="ai-chat-send-btn">Send</button></div></div><div class="ai-chat-panel" id="ai-review-list-panel"></div><div class="ai-chat-panel" id="ai-analytics-panel"></div>`;
   document.body.appendChild(chatContainer);
   const sendButton = document.getElementById("ai-chat-send-btn");
@@ -467,6 +500,7 @@ function createChatUI() {
       }
     });
   });
+  loadChatHistory();
 }
 function makeDraggable(element, handle) {
   let pos1 = 0,
@@ -495,13 +529,14 @@ function makeDraggable(element, handle) {
     document.onmousemove = null;
   }
 }
+
 function resetChatState() {
-  console.log("AI Mentor: Navigated to a new problem. Resetting chat state.");
-  chatHistory = [];
-  messageCounter = 0;
+  console.log("AI Mentor: Resetting in-memory chat state.");
+  chatHistory = []; // Clear in-memory history
   const messagesContainer = document.getElementById("ai-chat-messages");
   if (messagesContainer) messagesContainer.innerHTML = "";
 }
+
 async function handleSuccessfulSubmission() {
   console.log("Success detected!");
   const { geminiApiKey } = await LocalStorage.get("geminiApiKey");
@@ -520,10 +555,7 @@ async function handleSuccessfulSubmission() {
     return;
   }
   try {
-    const topicPrompt = `Based on the LeetCode problem title "${problemTitle}", what is the single most important data structure or algorithmic concept required? Respond with ONLY the name of the concept.`;
-    const topic = await callGeminiAPI(geminiApiKey, {
-      contents: [{ parts: [{ text: topicPrompt }] }],
-    });
+    const topic = await getTopicForProblem(geminiApiKey, problemTitle);
     await saveSolvedProblem(problemTitle, topic);
   } catch (error) {
     console.error("Failed to analyze solved problem:", error);
@@ -548,20 +580,22 @@ function addSubmitListener() {
     });
   }
 }
-const mainObserver = new MutationObserver(() => {
-  if (window.location.href !== currentProblemURL) {
-    currentProblemURL = window.location.href;
-    resetChatState();
-    if (window.location.href.includes("/submissions/detail/")) {
-      submissionObserver.observe(document.body, {
-        childList: true,
-        subtree: true,
-      });
-    }
-  }
+
+const mainObserver = new MutationObserver(async () => {
   const hookSelector = 'div[data-track-load="description_content"]';
   const hookElement = document.querySelector(hookSelector);
   if (hookElement) {
+    if (window.location.href !== currentProblemURL) {
+      currentProblemURL = window.location.href;
+      resetChatState();
+      await loadChatHistory();
+      if (window.location.href.includes("/submissions/detail/")) {
+        submissionObserver.observe(document.body, {
+          childList: true,
+          subtree: true,
+        });
+      }
+    }
     createMainButton();
     addSubmitListener();
   }
@@ -579,4 +613,20 @@ console.log("AI Mentor: Starting observers...");
 mainObserver.observe(document.body, { childList: true, subtree: true });
 if (window.location.href.includes("/submissions/detail/")) {
   submissionObserver.observe(document.body, { childList: true, subtree: true });
+}
+async function getTopicForProblem(apiKey, problemTitle) {
+  let { topicCache } = await LocalStorage.get("topicCache");
+  topicCache = topicCache || {};
+  if (topicCache[problemTitle]) {
+    console.log(`Cache hit for "${problemTitle}": ${topicCache[problemTitle]}`);
+    return topicCache[problemTitle];
+  }
+  console.log(`Cache miss for "${problemTitle}". Calling API.`);
+  const topicPrompt = `Based on the LeetCode problem title "${problemTitle}", what is the single most important data structure or algorithmic concept required? Respond with ONLY the name of the concept.`;
+  const topic = await callGeminiAPI(apiKey, {
+    contents: [{ parts: [{ text: topicPrompt }] }],
+  });
+  topicCache[problemTitle] = topic.trim();
+  await LocalStorage.set({ topicCache });
+  return topic.trim();
 }
