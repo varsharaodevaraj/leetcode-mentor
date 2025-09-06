@@ -8,7 +8,7 @@ console.log(
   "LeetCode AI Mentor: content.js script is active (v9.1 - Final Version)."
 );
 
-// --- STORAGE HELPER FUNCTIONS ---
+// --- STORAGE HELPEr FUNCTIONS ---
 const SessionStorage = {
   get: (keys) =>
     new Promise((resolve) =>
@@ -80,7 +80,7 @@ async function updateNotificationDot() {
   }
 }
 
-// --- Chat History Management ---
+// --- Chat history Management ---
 function getProblemKeyFromURL(url) {
   const match = url.match(/leetcode\.com\/problems\/([^/]+)/);
   return match ? `chatHistory_${match[1]}` : null;
@@ -107,7 +107,7 @@ async function loadChatHistory() {
   }
 }
 
-// --- UI AND LOGIC FUNCTIONS ---
+// --- UI and LOGIC FUNCTIONS ---
 function getProblemContext() {
   const titleSelectors = [
     'div[data-cy="question-title"]',
@@ -258,7 +258,7 @@ async function getRecommendations(apiKey, problemTitle) {
   }
 }
 
-// --- UPDATED: sendMessageToAI with final context fix ---
+// --- sendMessageToAI with final context fix ---
 async function sendMessageToAI() {
   const input = document.getElementById("ai-chat-input");
   if (!input) return;
@@ -279,7 +279,7 @@ async function sendMessageToAI() {
     input.value = "";
     loadingMessage = addMessageToChat("ai", "", true);
 
-    // This is the clean message for the UI and persistent history
+    // UI and persistent history
     const userMessageForHistory = {
       role: "user",
       parts: [{ text: userQuery }],
