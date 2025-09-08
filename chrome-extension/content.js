@@ -1,8 +1,8 @@
 // Global variables
-let chatHistory = [];
-let messageCounter = 0;
-let currentProblemURL = window.location.href;
-let myChart = null;
+let chatHistory = []; // this is the array that i'll use for to store the chat with ai, user and ai messages
+let messageCounter = 0; // this is to track the hints, hence for the review list
+let currentProblemURL = window.location.href; // this is compare if im in the same url or not
+let myChart = null; // the analytics part, to destroy and recreate the chart 
 
 console.log(
   "LeetCode AI Mentor: content.js script is active (v9.1 - Final Version)."
