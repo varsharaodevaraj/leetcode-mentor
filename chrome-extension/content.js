@@ -1,14 +1,16 @@
 // Global variables
-let chatHistory = []; // this is the array that i'll use for to store the chat with ai, user and ai messages
-let messageCounter = 0; // this is to track the hints, hence for the review list
-let currentProblemURL = window.location.href; // this is compare if im in the same url or not
-let myChart = null; // the analytics part, to destroy and recreate the chart 
+let chatHistory = [];
+let messageCounter = 0;
+let currentProblemURL = window.location.href;
+let myChart = null;
+let isLoading = false; // concurrent requests prevent cheyadaniki
+let uiInitialized = false;
 
 console.log(
-  "LeetCode AI Mentor: content.js script is active (v9.1 - Final Version)."
+  "LeetCode AI Mentor: content.js script is active (v11.2 - Final Version)."
 );
 
-// --- STORAGE HELPEr FUNCTIONS ---
+// --- STORAGE HELPER FUNCTIONS ---
 const SessionStorage = {
   get: (keys) =>
     new Promise((resolve) =>
@@ -80,7 +82,7 @@ async function updateNotificationDot() {
   }
 }
 
-// --- Chat history Management ---
+// --- Chat History Management ---
 function getProblemKeyFromURL(url) {
   const match = url.match(/leetcode\.com\/problems\/([^/]+)/);
   return match ? `chatHistory_${match[1]}` : null;
@@ -107,7 +109,7 @@ async function loadChatHistory() {
   }
 }
 
-// --- UI and LOGIC FUNCTIONS ---
+// --- UI AND LOGIC FUNCTIONS ---
 function getProblemContext() {
   const titleSelectors = [
     'div[data-cy="question-title"]',
@@ -125,9 +127,10 @@ function getProblemContext() {
   const descriptionSelector = 'div[data-track-load="description_content"]';
   const descriptionEl = document.querySelector(descriptionSelector);
   let userCode = "Could not read code from editor.";
-  if (window.monaco && window.monaco.editor) {
-    const models = window.monaco.editor.getModels();
-    if (models.length > 0) userCode = models[0].getValue();
+  const codeLines = document.querySelectorAll(".view-line");
+  if (codeLines.length > 0) {
+    const codeArray = Array.from(codeLines).map((line) => line.innerText);
+    userCode = codeArray.join("\n");
   }
   return {
     problemTitle,
@@ -257,92 +260,11 @@ async function getRecommendations(apiKey, problemTitle) {
     if (loadingMessage) loadingMessage.remove();
   }
 }
-
-// --- sendMessageToAI with final context fix ---
-async function sendMessageToAI() {
-  const input = document.getElementById("ai-chat-input");
-  if (!input) return;
-  const userQuery = input.value.trim();
-  if (!userQuery) return;
-  let loadingMessage = null;
-  try {
-    const { geminiApiKey } = await LocalStorage.get("geminiApiKey");
-    if (!geminiApiKey) {
-      addMessageToChat(
-        "ai",
-        "ERROR: API key not found. Please set it in options."
-      );
-      return;
-    }
-
-    addMessageToChat("user", userQuery);
-    input.value = "";
-    loadingMessage = addMessageToChat("ai", "", true);
-
-    // UI and persistent history
-    const userMessageForHistory = {
-      role: "user",
-      parts: [{ text: userQuery }],
-    };
-    chatHistory.push(userMessageForHistory);
-
-    let historyForAPI = [...chatHistory];
-
-    // If this is the first user message, prepend the full context to the API request
-    if (chatHistory.filter((m) => m.role === "user").length === 1) {
-      const context = getProblemContext();
-      const systemPrompt = `You are an expert LeetCode programming mentor. Your goal is to help users solve problems without giving them the direct answer. Stay strictly on the topic of the provided LeetCode problem. Do not provide the full code solution. Instead, guide the user with hints and Socratic questions.`;
-
-      const fullContextPrompt = `CONTEXT:\n- Problem: ${
-        context.problemTitle
-      }\n- Description: ${context.problemDescription}\n- My Code: ${
-        context.userCode || "None"
-      }\n\nINSTRUCTIONS:\n- ${systemPrompt}\n\nMY QUESTION:\n- ${userQuery}`;
-
-      // Replace the simple user query with the full context prompt FOR THE API ONLY
-      historyForAPI[historyForAPI.length - 1] = {
-        role: "user",
-        parts: [{ text: fullContextPrompt }],
-      };
-    }
-
-    messageCounter++;
-    const shouldRequestRecommendations = messageCounter >= 3;
-
-    const requestBody = { contents: historyForAPI };
-
-    const aiResponseText = await callGeminiAPI(geminiApiKey, requestBody);
-
-    if (loadingMessage) loadingMessage.remove();
-    addMessageToChat("ai", aiResponseText);
-
-    chatHistory.push({ role: "model", parts: [{ text: aiResponseText }] });
-    await saveChatHistory();
-
-    if (shouldRequestRecommendations) {
-      const context = getProblemContext();
-      await getRecommendations(geminiApiKey, context.problemTitle);
-      messageCounter = 0;
-    }
-  } catch (error) {
-    // If an error occurs, remove the user's last message from history to prevent issues
-    if (
-      chatHistory.length > 0 &&
-      chatHistory[chatHistory.length - 1].role === "user"
-    ) {
-      chatHistory.pop();
-    }
-    console.error("Error fetching AI response:", error);
-    if (loadingMessage) loadingMessage.remove();
-    addMessageToChat("ai", `Sorry, an error occurred. ${error.message}`);
-  }
-}
-
 async function renderAnalytics() {
   const panel = document.getElementById("ai-analytics-panel");
   if (!panel) return;
   const drawUI = async () => {
-    panel.innerHTML = `<div class="analytics-section"><h2>Overall Mastery</h2><div id="mastery-chart-container"><canvas id="masteryChart"></canvas><div id="mastery-score-text"></div></div></div><div class="analytics-section"><h2>Skills Breakdown</h2><ul class="skills-overview-list" id="skills-overview-list"></ul></div>`;
+    panel.innerHTML = `<div class="analytics-section"><h2>Overall Mastery</h2><div id="mastery-chart-container"></div></div><div class="analytics-section"><h2>Skills Breakdown</h2><ul class="skills-overview-list" id="skills-overview-list"></ul></div>`;
     const { solvedProblems } = await LocalStorage.get("solvedProblems");
     const { reviewList } = await LocalStorage.get("reviewList");
     const topicData = {};
@@ -399,9 +321,10 @@ async function renderAnalytics() {
     const overallTotal = totalSolved + totalReview;
     const masteryScore =
       overallTotal > 0 ? Math.round((totalSolved / overallTotal) * 100) : 0;
-    document.getElementById(
-      "mastery-score-text"
-    ).innerText = `${masteryScore}%`;
+    const masteryChartContainer = document.getElementById(
+      "mastery-chart-container"
+    );
+    masteryChartContainer.innerHTML = `<canvas id="masteryChart"></canvas><div id="mastery-score-text">${masteryScore}%</div>`;
     const ctx = document.getElementById("masteryChart").getContext("2d");
     if (myChart) myChart.destroy();
     myChart = new Chart(ctx, {
@@ -446,6 +369,79 @@ async function getCurrentTabId() {
   let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   return tab.id;
 }
+
+// sendMessageToAI with loading guard(idi prevention ki)
+async function sendMessageToAI(userQuery) {
+  if (isLoading || !userQuery) return; 
+  isLoading = true;
+  let loadingMessage = null;
+  try {
+    const { geminiApiKey } = await LocalStorage.get("geminiApiKey");
+    if (!geminiApiKey) {
+      addMessageToChat(
+        "ai",
+        "ERROR: API key not found. Please set it in options."
+      );
+      isLoading = false;
+      return;
+    }
+
+    addMessageToChat("user", userQuery);
+    loadingMessage = addMessageToChat("ai", "", true);
+
+    const userMessageForHistory = {
+      role: "user",
+      parts: [{ text: userQuery }],
+    };
+    chatHistory.push(userMessageForHistory);
+
+    let historyForAPI = [...chatHistory];
+
+    if (chatHistory.filter((m) => m.role === "user").length === 1) {
+      const context = getProblemContext();
+      const systemPrompt = `You are an expert LeetCode programming mentor...`; // Abridged
+      const fullContextPrompt = `CONTEXT:\n- Problem: ${
+        context.problemTitle
+      }\n- Description: ${context.problemDescription}\n- My Code: ${
+        context.userCode || "None"
+      }\n\nINSTRUCTIONS:\n- ${systemPrompt}\n\nMY QUESTION:\n- "${userQuery}"`;
+      historyForAPI[historyForAPI.length - 1] = {
+        role: "user",
+        parts: [{ text: fullContextPrompt }],
+      };
+    }
+
+    messageCounter++;
+    const shouldRequestRecommendations = messageCounter >= 3;
+
+    const requestBody = { contents: historyForAPI };
+    const aiResponseText = await callGeminiAPI(geminiApiKey, requestBody);
+
+    if (loadingMessage) loadingMessage.remove();
+    addMessageToChat("ai", aiResponseText);
+
+    chatHistory.push({ role: "model", parts: [{ text: aiResponseText }] });
+    await saveChatHistory();
+
+    if (shouldRequestRecommendations) {
+      const context = getProblemContext();
+      await getRecommendations(geminiApiKey, context.problemTitle);
+      messageCounter = 0;
+    }
+  } catch (error) {
+    if (
+      chatHistory.length > 0 &&
+      chatHistory[chatHistory.length - 1].role === "user"
+    )
+      chatHistory.pop();
+    console.error("Error fetching AI response:", error);
+    if (loadingMessage) loadingMessage.remove();
+    addMessageToChat("ai", `Sorry, an error occurred. ${error.message}`);
+  } finally {
+    isLoading = false; // ekkda im resetting the loading gaurd
+  }
+}
+
 function showSetupModal() {
   if (document.getElementById("ai-setup-modal")) return;
   const modal = document.createElement("div");
@@ -489,16 +485,58 @@ function createChatUI() {
   const chatContainer = document.createElement("div");
   chatContainer.id = "ai-chat-container";
   chatContainer.style.display = "flex";
-  chatContainer.innerHTML = `<div id="ai-chat-header">LeetCode AI Mentor</div><div id="ai-chat-tabs"><div class="ai-chat-tab active" data-tab="chat">Chat</div><div class="ai-chat-tab" data-tab="review">Revise List</div><div class="ai-chat-tab" data-tab="analytics">Analytics</div></div><div class="ai-chat-panel active" id="ai-chat-panel"><div id="ai-chat-messages"></div><div id="ai-chat-input-container"><input id="ai-chat-input" type="text" placeholder="Ask a hint..."><button id="ai-chat-send-btn">Send</button></div></div><div class="ai-chat-panel" id="ai-review-list-panel"></div><div class="ai-chat-panel" id="ai-analytics-panel"></div>`;
+  chatContainer.innerHTML = `
+        <div id="ai-chat-header">LeetCode AI Mentor</div>
+        <div id="ai-chat-tabs"><div class="ai-chat-tab active" data-tab="chat">Chat</div><div class="ai-chat-tab" data-tab="review">My Review List</div><div class="ai-chat-tab" data-tab="analytics">Analytics</div></div>
+        <div class="ai-chat-panel active" id="ai-chat-panel">
+            <div id="ai-chat-messages"></div>
+            <div id="ai-quick-actions">
+                <button class="quick-action-btn" data-prompt="Give me hint to the problem">Get a Hint</button>
+                <button class="quick-action-btn" data-prompt="Explain the approach to the problem">Explain Approach</button>
+                <button class="quick-action-btn" data-action="check_code">Check My Code</button>
+            </div>
+            <div id="ai-chat-input-container">
+                <input id="ai-chat-input" type="text" placeholder="Or type your own question...">
+                <button id="ai-chat-send-btn">Send</button>
+            </div>
+        </div>
+        <div class="ai-chat-panel" id="ai-review-list-panel"></div>
+        <div class="ai-chat-panel" id="ai-analytics-panel"></div>
+    `;
   document.body.appendChild(chatContainer);
+
   const sendButton = document.getElementById("ai-chat-send-btn");
   const input = document.getElementById("ai-chat-input");
   const header = document.getElementById("ai-chat-header");
-  sendButton.onclick = sendMessageToAI;
+
+  const handleTextInputSend = () => {
+    const query = input.value.trim();
+    if (query) {
+      sendMessageToAI(query);
+      input.value = "";
+    }
+  };
+
+  sendButton.onclick = handleTextInputSend;
   input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") sendMessageToAI();
+    if (e.key === "Enter") handleTextInputSend();
   });
   makeDraggable(chatContainer, header);
+
+  document.querySelectorAll(".quick-action-btn").forEach((button) => {
+    button.addEventListener("click", () => {
+      const action = button.dataset.action;
+      if (action === "check_code") {
+        const context = getProblemContext();
+        const prompt = `Please check my current code for bugs or improvements:\n\`\`\`\n${context.userCode}\n\`\`\``;
+        sendMessageToAI(prompt);
+      } else {
+        const prompt = button.dataset.prompt;
+        sendMessageToAI(prompt);
+      }
+    });
+  });
+
   const tabs = chatContainer.querySelectorAll(".ai-chat-tab");
   const panels = chatContainer.querySelectorAll(".ai-chat-panel");
   tabs.forEach((tab) => {
@@ -519,6 +557,7 @@ function createChatUI() {
       }
     });
   });
+
   loadChatHistory();
 }
 function makeDraggable(element, handle) {
@@ -553,6 +592,7 @@ function resetChatState() {
   chatHistory = [];
   const messagesContainer = document.getElementById("ai-chat-messages");
   if (messagesContainer) messagesContainer.innerHTML = "";
+  uiInitialized = false;
 }
 async function handleSuccessfulSubmission() {
   console.log("Success detected!");
@@ -597,12 +637,14 @@ function addSubmitListener() {
     });
   }
 }
+
 const mainObserver = new MutationObserver(async () => {
   const hookSelector = 'div[data-track-load="description_content"]';
   const hookElement = document.querySelector(hookSelector);
   if (hookElement) {
     if (window.location.href !== currentProblemURL) {
       currentProblemURL = window.location.href;
+      uiInitialized = false;
       resetChatState();
       await loadChatHistory();
       if (window.location.href.includes("/submissions/detail/")) {
@@ -612,8 +654,11 @@ const mainObserver = new MutationObserver(async () => {
         });
       }
     }
-    createMainButton();
-    addSubmitListener();
+    if (!uiInitialized) {
+      createMainButton();
+      addSubmitListener();
+      uiInitialized = true;
+    }
   }
 });
 const submissionObserver = new MutationObserver(() => {
