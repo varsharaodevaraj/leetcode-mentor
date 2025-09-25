@@ -3,11 +3,11 @@ let chatHistory = [];
 let messageCounter = 0;
 let currentProblemURL = window.location.href;
 let myChart = null;
-let isLoading = false; // concurrent requests prevent cheyadaniki
+let isLoading = false;
 let uiInitialized = false;
 
 console.log(
-  "LeetCode AI Mentor: content.js script is active (v11.2 - Final Version)."
+  "LeetCode AI Mentor: content.js script is active (v11.3 - Final Version with Markdown)."
 );
 
 // --- STORAGE HELPER FUNCTIONS ---
@@ -140,28 +140,51 @@ function getProblemContext() {
     userCode,
   };
 }
+
 function addMessageToChat(sender, message, isLoading = false) {
   const messagesContainer = document.getElementById("ai-chat-messages");
   if (!messagesContainer) return null;
+
   const messageDiv = document.createElement("div");
   messageDiv.classList.add(
     "ai-chat-message",
     sender === "user" ? "user-message" : "ai-message"
   );
+
   if (isLoading) {
     messageDiv.classList.add("loading");
     messageDiv.textContent = "Thinking...";
   } else {
-    message = message.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    messageDiv.innerHTML = message.replace(
-      /```([\s\S]*?)```/g,
-      "<pre><code>$1</code></pre>"
+    let sanitizedMessage = message.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    sanitizedMessage = sanitizedMessage.replace(
+      /```(java|javascript|python|c\+\+|c#|kotlin|swift)?\s*([\s\S]*?)```/g,
+      "<pre><code>$2</code></pre>"
     );
+    sanitizedMessage = sanitizedMessage.replace(
+      /\*\*(.*?)\*\*/g,
+      "<strong>$1</strong>"
+    );
+    sanitizedMessage = sanitizedMessage.replace(/\*(.*?)\*/g, "<em>$1</em>");
+    sanitizedMessage = sanitizedMessage.replace(
+      /^\s*\*\s+(.*)/gm,
+      "<ul><li>$1</li></ul>"
+    );
+    sanitizedMessage = sanitizedMessage.replace(/<\/ul>\s*<ul>/g, "");
+    const parts = sanitizedMessage.split(/(<pre>[\s\S]*?<\/pre>)/);
+    const formattedParts = parts.map((part) => {
+      if (part.startsWith("<pre>")) {
+        return part;
+      }
+      return part.replace(/\n/g, "<br>");
+    });
+    messageDiv.innerHTML = formattedParts.join("");
   }
+
   messagesContainer.appendChild(messageDiv);
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
   return messageDiv;
 }
+
 async function renderReviewList() {
   const panel = document.getElementById("ai-review-list-panel");
   if (!panel) return;
@@ -369,10 +392,8 @@ async function getCurrentTabId() {
   let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   return tab.id;
 }
-
-// sendMessageToAI with loading guard(idi prevention ki)
 async function sendMessageToAI(userQuery) {
-  if (isLoading || !userQuery) return; 
+  if (isLoading || !userQuery) return;
   isLoading = true;
   let loadingMessage = null;
   try {
@@ -385,21 +406,17 @@ async function sendMessageToAI(userQuery) {
       isLoading = false;
       return;
     }
-
     addMessageToChat("user", userQuery);
     loadingMessage = addMessageToChat("ai", "", true);
-
     const userMessageForHistory = {
       role: "user",
       parts: [{ text: userQuery }],
     };
     chatHistory.push(userMessageForHistory);
-
     let historyForAPI = [...chatHistory];
-
     if (chatHistory.filter((m) => m.role === "user").length === 1) {
       const context = getProblemContext();
-      const systemPrompt = `You are an expert LeetCode programming mentor...`; // Abridged
+      const systemPrompt = `You are an expert LeetCode programming mentor...`;
       const fullContextPrompt = `CONTEXT:\n- Problem: ${
         context.problemTitle
       }\n- Description: ${context.problemDescription}\n- My Code: ${
@@ -410,19 +427,14 @@ async function sendMessageToAI(userQuery) {
         parts: [{ text: fullContextPrompt }],
       };
     }
-
     messageCounter++;
     const shouldRequestRecommendations = messageCounter >= 3;
-
     const requestBody = { contents: historyForAPI };
     const aiResponseText = await callGeminiAPI(geminiApiKey, requestBody);
-
     if (loadingMessage) loadingMessage.remove();
     addMessageToChat("ai", aiResponseText);
-
     chatHistory.push({ role: "model", parts: [{ text: aiResponseText }] });
     await saveChatHistory();
-
     if (shouldRequestRecommendations) {
       const context = getProblemContext();
       await getRecommendations(geminiApiKey, context.problemTitle);
@@ -438,10 +450,9 @@ async function sendMessageToAI(userQuery) {
     if (loadingMessage) loadingMessage.remove();
     addMessageToChat("ai", `Sorry, an error occurred. ${error.message}`);
   } finally {
-    isLoading = false; // ekkda im resetting the loading gaurd
+    isLoading = false;
   }
 }
-
 function showSetupModal() {
   if (document.getElementById("ai-setup-modal")) return;
   const modal = document.createElement("div");
@@ -485,30 +496,11 @@ function createChatUI() {
   const chatContainer = document.createElement("div");
   chatContainer.id = "ai-chat-container";
   chatContainer.style.display = "flex";
-  chatContainer.innerHTML = `
-        <div id="ai-chat-header">LeetCode AI Mentor</div>
-        <div id="ai-chat-tabs"><div class="ai-chat-tab active" data-tab="chat">Chat</div><div class="ai-chat-tab" data-tab="review">My Review List</div><div class="ai-chat-tab" data-tab="analytics">Analytics</div></div>
-        <div class="ai-chat-panel active" id="ai-chat-panel">
-            <div id="ai-chat-messages"></div>
-            <div id="ai-quick-actions">
-                <button class="quick-action-btn" data-prompt="Give me hint to the problem">Get a Hint</button>
-                <button class="quick-action-btn" data-prompt="Explain the approach to the problem">Explain Approach</button>
-                <button class="quick-action-btn" data-action="check_code">Check My Code</button>
-            </div>
-            <div id="ai-chat-input-container">
-                <input id="ai-chat-input" type="text" placeholder="Or type your own question...">
-                <button id="ai-chat-send-btn">Send</button>
-            </div>
-        </div>
-        <div class="ai-chat-panel" id="ai-review-list-panel"></div>
-        <div class="ai-chat-panel" id="ai-analytics-panel"></div>
-    `;
+  chatContainer.innerHTML = `<div id="ai-chat-header">LeetCode AI Mentor</div><div id="ai-chat-tabs"><div class="ai-chat-tab active" data-tab="chat">Chat</div><div class="ai-chat-tab" data-tab="review">My Review List</div><div class="ai-chat-tab" data-tab="analytics">Analytics</div></div><div class="ai-chat-panel active" id="ai-chat-panel"><div id="ai-chat-messages"></div><div id="ai-quick-actions"><button class="quick-action-btn" data-prompt="Give me a small hint to get started">Get a Hint</button><button class="quick-action-btn" data-prompt="Explain the general approach">Explain Approach</button><button class="quick-action-btn" data-action="check_code">Check My Code</button></div><div id="ai-chat-input-container"><input id="ai-chat-input" type="text" placeholder="Or type your own question..."><button id="ai-chat-send-btn">Send</button></div></div><div class="ai-chat-panel" id="ai-review-list-panel"></div><div class="ai-chat-panel" id="ai-analytics-panel"></div>`;
   document.body.appendChild(chatContainer);
-
   const sendButton = document.getElementById("ai-chat-send-btn");
   const input = document.getElementById("ai-chat-input");
   const header = document.getElementById("ai-chat-header");
-
   const handleTextInputSend = () => {
     const query = input.value.trim();
     if (query) {
@@ -516,19 +508,17 @@ function createChatUI() {
       input.value = "";
     }
   };
-
   sendButton.onclick = handleTextInputSend;
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") handleTextInputSend();
   });
   makeDraggable(chatContainer, header);
-
   document.querySelectorAll(".quick-action-btn").forEach((button) => {
     button.addEventListener("click", () => {
       const action = button.dataset.action;
       if (action === "check_code") {
         const context = getProblemContext();
-        const prompt = `Please check my current code for bugs or improvements:\n\`\`\`\n${context.userCode}\n\`\`\``;
+        const prompt = `Please check my current code for bugs or improvements\n\`\`\`\n${context.userCode}\n\`\`\``;
         sendMessageToAI(prompt);
       } else {
         const prompt = button.dataset.prompt;
@@ -536,7 +526,6 @@ function createChatUI() {
       }
     });
   });
-
   const tabs = chatContainer.querySelectorAll(".ai-chat-tab");
   const panels = chatContainer.querySelectorAll(".ai-chat-panel");
   tabs.forEach((tab) => {
@@ -557,7 +546,6 @@ function createChatUI() {
       }
     });
   });
-
   loadChatHistory();
 }
 function makeDraggable(element, handle) {
