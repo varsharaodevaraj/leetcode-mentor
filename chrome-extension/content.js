@@ -247,7 +247,8 @@ async function renderReviewList() {
   });
 }
 async function callGeminiAPI(apiKey, requestBody) {
-  const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+  // const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+  const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite-preview-06-17:generateContent?key=${apiKey}`;
   const response = await fetch(API_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
