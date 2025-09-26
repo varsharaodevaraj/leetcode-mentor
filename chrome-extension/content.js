@@ -6,9 +6,6 @@ let myChart = null;
 let isLoading = false;
 let uiInitialized = false;
 
-// Add global variable for synced code
-let syncedCode = null;
-
 console.log(
   "LeetCode AI Mentor: content.js script is active (v11.3 - Final Version with Markdown)."
 );
@@ -130,7 +127,7 @@ function getProblemContext() {
   const descriptionSelector = 'div[data-track-load="description_content"]';
   const descriptionEl = document.querySelector(descriptionSelector);
   
-  // Better code detection from Monaco editor
+  // code detection from Monaco editor
   let userCode = getCodeFromMonacoEditor();
   
   return {
@@ -142,10 +139,10 @@ function getProblemContext() {
   };
 }
 
-// New function to get code from Monaco editor
+// function to get code from Monaco editor
 function getCodeFromMonacoEditor() {
   try {
-    // Method 1: Try Monaco editor models (most reliable)
+    // Method 1: yaha trying Monaco editor models (most reliable)
     if (window.monaco && window.monaco.editor) {
       const models = window.monaco.editor.getModels();
       if (models && models.length > 0) {
@@ -156,7 +153,7 @@ function getCodeFromMonacoEditor() {
       }
     }
 
-    // Method 2: Try to find editor instances
+    // Method 2: phir yaha pe trying to find editor instances
     if (window.monaco && window.monaco.editor) {
       const editors = window.monaco.editor.getEditors();
       for (const editor of editors) {
@@ -562,7 +559,6 @@ function createChatUI() {
     if (e.key === "Enter") handleTextInputSend();
   });
   
-  // Clear Chat functionality
   clearChatBtn.addEventListener("click", () => {
     if (confirm("Clear chat history for this problem?")) {
       chatHistory = [];
@@ -570,7 +566,7 @@ function createChatUI() {
       if (messagesContainer) {
         messagesContainer.innerHTML = "";
       }
-      saveChatHistory(); // Save empty history
+      saveChatHistory();
     }
   });
   
