@@ -5,8 +5,8 @@
   right: 20px;
   background: linear-gradient(135deg, #8a2be2, #4b0082);
   color: white;
-  padding: 8px 12px 8px 18px; /* horizontal padding */
-  border-radius: 25px;
+  padding: 8px 12px 8px 18px;
+  border-radius: 30px;
   border: none;
   cursor: pointer;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
@@ -24,7 +24,7 @@
   background: linear-gradient(135deg, #9932cc, #5a0092);
 }
 #ai-mentor-btn .button-icon {
-  width: 34px; /* icon */
+  width: 34px;
   height: 34px;
   margin-left: 12px;
   background-image: url("chrome-extension://__MSG_@@extension_id__/robot_icon.png");
@@ -57,7 +57,7 @@
   box-sizing: border-box;
 }
 
-/* Chatbox Container */
+/* Chatbox Container - make it more curved */
 #ai-chat-container {
   position: fixed;
   bottom: 80px;
@@ -66,7 +66,7 @@
   height: 550px;
   background-color: #1e1e1e;
   border: 1px solid #333;
-  border-radius: 12px;
+  border-radius: 20px;
   box-shadow: 0 5px 20px rgba(0, 0, 0, 0.4);
   display: flex;
   flex-direction: column;
@@ -83,6 +83,7 @@
   cursor: move;
   user-select: none;
   border-bottom: 1px solid #333;
+  border-radius: 20px 20px 0 0;
 }
 #ai-chat-tabs {
   display: flex;
@@ -97,6 +98,8 @@
   border-bottom: 3px solid transparent;
   transition: all 0.2s ease;
   font-size: 14px;
+  border-radius: 15px 15px 0 0;
+  margin: 0 2px;
 }
 .ai-chat-tab.active {
   color: #fff;
@@ -123,7 +126,7 @@
 .ai-chat-message {
   margin-bottom: 12px;
   padding: 8px 12px;
-  border-radius: 8px;
+  border-radius: 18px;
   max-width: 85%;
   line-height: 1.5;
   word-wrap: break-word;
@@ -153,7 +156,7 @@
   font-size: 16px;
   font-weight: bold;
   color: #8a2be2;
-  border-radius: 6px;
+  border-radius: 15px;
   transition: background-color 0.2s;
   display: flex;
   justify-content: space-between;
@@ -198,7 +201,7 @@
   color: #4caf50;
   font-size: 10px;
   padding: 3px 8px;
-  border-radius: 10px;
+  border-radius: 15px;
   cursor: pointer;
   transition: all 0.2s;
 }
@@ -237,14 +240,14 @@
 }
 .skill-tag {
   padding: 4px 10px;
-  border-radius: 12px;
+  border-radius: 20px;
   font-size: 12px;
   font-weight: bold;
   color: #fff;
   background: linear-gradient(90deg, #4b0082, #8a2be2);
 }
 
-/* NEW: Mastery Score Chart Styles */
+/*  Mastery Score Chart Styles */
 #mastery-chart-container {
   position: relative;
   width: 150px;
@@ -265,12 +268,13 @@
   display: flex;
   padding: 10px;
   border-top: 1px solid #333;
+  border-radius: 0 0 20px 20px;
 }
 #ai-chat-input {
   flex-grow: 1;
   padding: 10px;
   border: 1px solid #444;
-  border-radius: 6px;
+  border-radius: 20px;
   background-color: #2c2c2c;
   color: #fff;
   margin-right: 8px;
@@ -281,7 +285,7 @@
   border: none;
   background-color: #8a2be2;
   color: white;
-  border-radius: 6px;
+  border-radius: 20px;
   cursor: pointer;
   font-weight: bold;
 }
@@ -295,7 +299,7 @@
   width: 350px;
   background-color: #2a2a2a;
   border: 1px solid #444;
-  border-radius: 12px;
+  border-radius: 20px;
   box-shadow: 0 5px 20px rgba(0, 0, 0, 0.4);
   z-index: 10000;
   color: #e0e0e0;
@@ -320,7 +324,7 @@
   background-color: #8a2be2;
   color: white;
   border: none;
-  border-radius: 6px;
+  border-radius: 20px;
   cursor: pointer;
   font-weight: bold;
   font-size: 16px;
@@ -328,4 +332,73 @@
 }
 #ai-setup-modal button:hover {
   background-color: #9932cc;
+}
+
+/* Quick Action Buttons Container */
+#ai-quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 15px;
+  border-top: 1px solid #333;
+  background-color: #1e1e1e;
+}
+
+/* Quick Action Buttons */
+.quick-action-btn {
+  flex: 1;
+  min-width: calc(33.333% - 6px);
+  background-color: #2c2c2c;
+  color: #e0e0e0;
+  border: 1px solid #444;
+  padding: 10px 8px;
+  border-radius: 15px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
+}
+
+.quick-action-btn:hover {
+  background-color: #3a3a3a;
+  border-color: #8a2be2;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(138, 43, 226, 0.3);
+}
+
+.quick-action-btn:active {
+  transform: translateY(0);
+  background-color: #8a2be2;
+  border-color: #8a2be2;
+}
+
+/* Special styling for Clear Chat button */
+#clear-chat-btn {
+  background-color: #3d2c2c;
+  border-color: #666;
+  color: #ff6b6b;
+}
+
+#clear-chat-btn:hover {
+  background-color: #4a3333;
+  border-color: #ff6b6b;
+  color: #fff;
+}
+
+#clear-chat-btn:active {
+  background-color: #ff6b6b;
+  border-color: #ff6b6b;
+}
+
+/* Responsive design for smaller screens */
+@media (max-width: 500px) {
+  .quick-action-btn {
+    min-width: calc(50% - 4px);
+    font-size: 11px;
+    padding: 8px 6px;
+  }
 }
