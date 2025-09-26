@@ -1,14 +1,19 @@
 // Global variables
-let chatHistory = []; // this is the array that i'll use for to store the chat with ai, user and ai messages
-let messageCounter = 0; // this is to track the hints, hence for the review list
-let currentProblemURL = window.location.href; // this is compare if im in the same url or not
-let myChart = null; // the analytics part, to destroy and recreate the chart 
+let chatHistory = [];
+let messageCounter = 0;
+let currentProblemURL = window.location.href;
+let myChart = null;
+let isLoading = false;
+let uiInitialized = false;
+
+// Add global variable for synced code
+let syncedCode = null;
 
 console.log(
-  "LeetCode AI Mentor: content.js script is active (v9.1 - Final Version)."
+  "LeetCode AI Mentor: content.js script is active (v11.3 - Final Version with Markdown)."
 );
 
-// --- STORAGE HELPEr FUNCTIONS ---
+// --- STORAGE HELPER FUNCTIONS ---
 const SessionStorage = {
   get: (keys) =>
     new Promise((resolve) =>
@@ -80,7 +85,7 @@ async function updateNotificationDot() {
   }
 }
 
-// --- Chat history Management ---
+// --- Chat History Management ---
 function getProblemKeyFromURL(url) {
   const match = url.match(/leetcode\.com\/problems\/([^/]+)/);
   return match ? `chatHistory_${match[1]}` : null;
@@ -107,7 +112,7 @@ async function loadChatHistory() {
   }
 }
 
-// --- UI and LOGIC FUNCTIONS ---
+// --- UI AND LOGIC FUNCTIONS ---
 function getProblemContext() {
   const titleSelectors = [
     'div[data-cy="question-title"]',
@@ -124,11 +129,10 @@ function getProblemContext() {
   }
   const descriptionSelector = 'div[data-track-load="description_content"]';
   const descriptionEl = document.querySelector(descriptionSelector);
-  let userCode = "Could not read code from editor.";
-  if (window.monaco && window.monaco.editor) {
-    const models = window.monaco.editor.getModels();
-    if (models.length > 0) userCode = models[0].getValue();
-  }
+  
+  // Better code detection from Monaco editor
+  let userCode = getCodeFromMonacoEditor();
+  
   return {
     problemTitle,
     problemDescription: descriptionEl
@@ -137,28 +141,95 @@ function getProblemContext() {
     userCode,
   };
 }
+
+// New function to get code from Monaco editor
+function getCodeFromMonacoEditor() {
+  try {
+    // Method 1: Try Monaco editor models (most reliable)
+    if (window.monaco && window.monaco.editor) {
+      const models = window.monaco.editor.getModels();
+      if (models && models.length > 0) {
+        const code = models[0].getValue();
+        if (code && code.trim()) {
+          return code;
+        }
+      }
+    }
+
+    // Method 2: Try to find editor instances
+    if (window.monaco && window.monaco.editor) {
+      const editors = window.monaco.editor.getEditors();
+      for (const editor of editors) {
+        if (editor && typeof editor.getValue === 'function') {
+          const code = editor.getValue();
+          if (code && code.trim()) {
+            return code;
+          }
+        }
+      }
+    }
+
+    // Method 3: Fallback to DOM parsing
+    const codeLines = document.querySelectorAll(".view-line");
+    if (codeLines.length > 0) {
+      const codeArray = Array.from(codeLines).map((line) => line.innerText);
+      const code = codeArray.join("\n");
+      if (code && code.trim()) {
+        return code;
+      }
+    }
+
+    return "Could not read code from editor.";
+  } catch (error) {
+    console.error("Error reading code from editor:", error);
+    return "Could not read code from editor.";
+  }
+}
+
 function addMessageToChat(sender, message, isLoading = false) {
   const messagesContainer = document.getElementById("ai-chat-messages");
   if (!messagesContainer) return null;
+
   const messageDiv = document.createElement("div");
   messageDiv.classList.add(
     "ai-chat-message",
     sender === "user" ? "user-message" : "ai-message"
   );
+
   if (isLoading) {
     messageDiv.classList.add("loading");
     messageDiv.textContent = "Thinking...";
   } else {
-    message = message.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    messageDiv.innerHTML = message.replace(
-      /```([\s\S]*?)```/g,
-      "<pre><code>$1</code></pre>"
+    let sanitizedMessage = message.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    sanitizedMessage = sanitizedMessage.replace(
+      /```(java|javascript|python|c\+\+|c#|kotlin|swift)?\s*([\s\S]*?)```/g,
+      "<pre><code>$2</code></pre>"
     );
+    sanitizedMessage = sanitizedMessage.replace(
+      /\*\*(.*?)\*\*/g,
+      "<strong>$1</strong>"
+    );
+    sanitizedMessage = sanitizedMessage.replace(/\*(.*?)\*/g, "<em>$1</em>");
+    sanitizedMessage = sanitizedMessage.replace(
+      /^\s*\*\s+(.*)/gm,
+      "<ul><li>$1</li></ul>"
+    );
+    sanitizedMessage = sanitizedMessage.replace(/<\/ul>\s*<ul>/g, "");
+    const parts = sanitizedMessage.split(/(<pre>[\s\S]*?<\/pre>)/);
+    const formattedParts = parts.map((part) => {
+      if (part.startsWith("<pre>")) {
+        return part;
+      }
+      return part.replace(/\n/g, "<br>");
+    });
+    messageDiv.innerHTML = formattedParts.join("");
   }
+
   messagesContainer.appendChild(messageDiv);
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
   return messageDiv;
 }
+
 async function renderReviewList() {
   const panel = document.getElementById("ai-review-list-panel");
   if (!panel) return;
@@ -258,92 +329,11 @@ async function getRecommendations(apiKey, problemTitle) {
     if (loadingMessage) loadingMessage.remove();
   }
 }
-
-// --- sendMessageToAI with final context fix ---
-async function sendMessageToAI() {
-  const input = document.getElementById("ai-chat-input");
-  if (!input) return;
-  const userQuery = input.value.trim();
-  if (!userQuery) return;
-  let loadingMessage = null;
-  try {
-    const { geminiApiKey } = await LocalStorage.get("geminiApiKey");
-    if (!geminiApiKey) {
-      addMessageToChat(
-        "ai",
-        "ERROR: API key not found. Please set it in options."
-      );
-      return;
-    }
-
-    addMessageToChat("user", userQuery);
-    input.value = "";
-    loadingMessage = addMessageToChat("ai", "", true);
-
-    // UI and persistent history
-    const userMessageForHistory = {
-      role: "user",
-      parts: [{ text: userQuery }],
-    };
-    chatHistory.push(userMessageForHistory);
-
-    let historyForAPI = [...chatHistory];
-
-    // If this is the first user message, prepend the full context to the API request
-    if (chatHistory.filter((m) => m.role === "user").length === 1) {
-      const context = getProblemContext();
-      const systemPrompt = `You are an expert LeetCode programming mentor. Your goal is to help users solve problems without giving them the direct answer. Stay strictly on the topic of the provided LeetCode problem. Do not provide the full code solution. Instead, guide the user with hints and Socratic questions.`;
-
-      const fullContextPrompt = `CONTEXT:\n- Problem: ${
-        context.problemTitle
-      }\n- Description: ${context.problemDescription}\n- My Code: ${
-        context.userCode || "None"
-      }\n\nINSTRUCTIONS:\n- ${systemPrompt}\n\nMY QUESTION:\n- ${userQuery}`;
-
-      // Replace the simple user query with the full context prompt FOR THE API ONLY
-      historyForAPI[historyForAPI.length - 1] = {
-        role: "user",
-        parts: [{ text: fullContextPrompt }],
-      };
-    }
-
-    messageCounter++;
-    const shouldRequestRecommendations = messageCounter >= 3;
-
-    const requestBody = { contents: historyForAPI };
-
-    const aiResponseText = await callGeminiAPI(geminiApiKey, requestBody);
-
-    if (loadingMessage) loadingMessage.remove();
-    addMessageToChat("ai", aiResponseText);
-
-    chatHistory.push({ role: "model", parts: [{ text: aiResponseText }] });
-    await saveChatHistory();
-
-    if (shouldRequestRecommendations) {
-      const context = getProblemContext();
-      await getRecommendations(geminiApiKey, context.problemTitle);
-      messageCounter = 0;
-    }
-  } catch (error) {
-    // If an error occurs, remove the user's last message from history to prevent issues
-    if (
-      chatHistory.length > 0 &&
-      chatHistory[chatHistory.length - 1].role === "user"
-    ) {
-      chatHistory.pop();
-    }
-    console.error("Error fetching AI response:", error);
-    if (loadingMessage) loadingMessage.remove();
-    addMessageToChat("ai", `Sorry, an error occurred. ${error.message}`);
-  }
-}
-
 async function renderAnalytics() {
   const panel = document.getElementById("ai-analytics-panel");
   if (!panel) return;
   const drawUI = async () => {
-    panel.innerHTML = `<div class="analytics-section"><h2>Overall Mastery</h2><div id="mastery-chart-container"><canvas id="masteryChart"></canvas><div id="mastery-score-text"></div></div></div><div class="analytics-section"><h2>Skills Breakdown</h2><ul class="skills-overview-list" id="skills-overview-list"></ul></div>`;
+    panel.innerHTML = `<div class="analytics-section"><h2>Overall Mastery</h2><div id="mastery-chart-container"></div></div><div class="analytics-section"><h2>Skills Breakdown</h2><ul class="skills-overview-list" id="skills-overview-list"></ul></div>`;
     const { solvedProblems } = await LocalStorage.get("solvedProblems");
     const { reviewList } = await LocalStorage.get("reviewList");
     const topicData = {};
@@ -400,9 +390,10 @@ async function renderAnalytics() {
     const overallTotal = totalSolved + totalReview;
     const masteryScore =
       overallTotal > 0 ? Math.round((totalSolved / overallTotal) * 100) : 0;
-    document.getElementById(
-      "mastery-score-text"
-    ).innerText = `${masteryScore}%`;
+    const masteryChartContainer = document.getElementById(
+      "mastery-chart-container"
+    );
+    masteryChartContainer.innerHTML = `<canvas id="masteryChart"></canvas><div id="mastery-score-text">${masteryScore}%</div>`;
     const ctx = document.getElementById("masteryChart").getContext("2d");
     if (myChart) myChart.destroy();
     myChart = new Chart(ctx, {
@@ -447,6 +438,67 @@ async function getCurrentTabId() {
   let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   return tab.id;
 }
+async function sendMessageToAI(userQuery) {
+  if (isLoading || !userQuery) return;
+  isLoading = true;
+  let loadingMessage = null;
+  try {
+    const { geminiApiKey } = await LocalStorage.get("geminiApiKey");
+    if (!geminiApiKey) {
+      addMessageToChat(
+        "ai",
+        "ERROR: API key not found. Please set it in options."
+      );
+      isLoading = false;
+      return;
+    }
+    addMessageToChat("user", userQuery);
+    loadingMessage = addMessageToChat("ai", "", true);
+    const userMessageForHistory = {
+      role: "user",
+      parts: [{ text: userQuery }],
+    };
+    chatHistory.push(userMessageForHistory);
+    let historyForAPI = [...chatHistory];
+    if (chatHistory.filter((m) => m.role === "user").length === 1) {
+      const context = getProblemContext();
+      const systemPrompt = `You are an expert LeetCode programming mentor...`;
+      const fullContextPrompt = `CONTEXT:\n- Problem: ${
+        context.problemTitle
+      }\n- Description: ${context.problemDescription}\n- My Code: ${
+        context.userCode || "None"
+      }\n\nINSTRUCTIONS:\n- ${systemPrompt}\n\nMY QUESTION:\n- "${userQuery}"`;
+      historyForAPI[historyForAPI.length - 1] = {
+        role: "user",
+        parts: [{ text: fullContextPrompt }],
+      };
+    }
+    messageCounter++;
+    const shouldRequestRecommendations = messageCounter >= 3;
+    const requestBody = { contents: historyForAPI };
+    const aiResponseText = await callGeminiAPI(geminiApiKey, requestBody);
+    if (loadingMessage) loadingMessage.remove();
+    addMessageToChat("ai", aiResponseText);
+    chatHistory.push({ role: "model", parts: [{ text: aiResponseText }] });
+    await saveChatHistory();
+    if (shouldRequestRecommendations) {
+      const context = getProblemContext();
+      await getRecommendations(geminiApiKey, context.problemTitle);
+      messageCounter = 0;
+    }
+  } catch (error) {
+    if (
+      chatHistory.length > 0 &&
+      chatHistory[chatHistory.length - 1].role === "user"
+    )
+      chatHistory.pop();
+    console.error("Error fetching AI response:", error);
+    if (loadingMessage) loadingMessage.remove();
+    addMessageToChat("ai", `Sorry, an error occurred. ${error.message}`);
+  } finally {
+    isLoading = false;
+  }
+}
 function showSetupModal() {
   if (document.getElementById("ai-setup-modal")) return;
   const modal = document.createElement("div");
@@ -490,16 +542,48 @@ function createChatUI() {
   const chatContainer = document.createElement("div");
   chatContainer.id = "ai-chat-container";
   chatContainer.style.display = "flex";
-  chatContainer.innerHTML = `<div id="ai-chat-header">LeetCode AI Mentor</div><div id="ai-chat-tabs"><div class="ai-chat-tab active" data-tab="chat">Chat</div><div class="ai-chat-tab" data-tab="review">Revise List</div><div class="ai-chat-tab" data-tab="analytics">Analytics</div></div><div class="ai-chat-panel active" id="ai-chat-panel"><div id="ai-chat-messages"></div><div id="ai-chat-input-container"><input id="ai-chat-input" type="text" placeholder="Ask a hint..."><button id="ai-chat-send-btn">Send</button></div></div><div class="ai-chat-panel" id="ai-review-list-panel"></div><div class="ai-chat-panel" id="ai-analytics-panel"></div>`;
+  chatContainer.innerHTML = `<div id="ai-chat-header">LeetCode AI Mentor</div><div id="ai-chat-tabs"><div class="ai-chat-tab active" data-tab="chat">Chat</div><div class="ai-chat-tab" data-tab="review">My Review List</div><div class="ai-chat-tab" data-tab="analytics">Analytics</div></div><div class="ai-chat-panel active" id="ai-chat-panel"><div id="ai-chat-messages"></div><div id="ai-quick-actions"><button class="quick-action-btn" data-prompt="Give me a small hint to get started">Get a Hint</button><button class="quick-action-btn" data-prompt="Explain the approach of the problem">Explain Approach</button><button class="quick-action-btn" id="clear-chat-btn">Clear Chat</button></div><div id="ai-chat-input-container"><input id="ai-chat-input" type="text" placeholder="Or type your own question..."><button id="ai-chat-send-btn">Send</button></div></div><div class="ai-chat-panel" id="ai-review-list-panel"></div><div class="ai-chat-panel" id="ai-analytics-panel"></div>`;
   document.body.appendChild(chatContainer);
+  
   const sendButton = document.getElementById("ai-chat-send-btn");
   const input = document.getElementById("ai-chat-input");
   const header = document.getElementById("ai-chat-header");
-  sendButton.onclick = sendMessageToAI;
+  const clearChatBtn = document.getElementById("clear-chat-btn");
+  
+  const handleTextInputSend = () => {
+    const query = input.value.trim();
+    if (query) {
+      sendMessageToAI(query);
+      input.value = "";
+    }
+  };
+  sendButton.onclick = handleTextInputSend;
   input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") sendMessageToAI();
+    if (e.key === "Enter") handleTextInputSend();
   });
+  
+  // Clear Chat functionality
+  clearChatBtn.addEventListener("click", () => {
+    if (confirm("Clear chat history for this problem?")) {
+      chatHistory = [];
+      const messagesContainer = document.getElementById("ai-chat-messages");
+      if (messagesContainer) {
+        messagesContainer.innerHTML = "";
+      }
+      saveChatHistory(); // Save empty history
+    }
+  });
+  
   makeDraggable(chatContainer, header);
+  document.querySelectorAll(".quick-action-btn").forEach((button) => {
+    button.addEventListener("click", () => {
+      const prompt = button.dataset.prompt;
+      if (prompt) {
+        sendMessageToAI(prompt);
+      }
+    });
+  });
+  
   const tabs = chatContainer.querySelectorAll(".ai-chat-tab");
   const panels = chatContainer.querySelectorAll(".ai-chat-panel");
   tabs.forEach((tab) => {
@@ -554,6 +638,7 @@ function resetChatState() {
   chatHistory = [];
   const messagesContainer = document.getElementById("ai-chat-messages");
   if (messagesContainer) messagesContainer.innerHTML = "";
+  uiInitialized = false;
 }
 async function handleSuccessfulSubmission() {
   console.log("Success detected!");
@@ -598,12 +683,14 @@ function addSubmitListener() {
     });
   }
 }
+
 const mainObserver = new MutationObserver(async () => {
   const hookSelector = 'div[data-track-load="description_content"]';
   const hookElement = document.querySelector(hookSelector);
   if (hookElement) {
     if (window.location.href !== currentProblemURL) {
       currentProblemURL = window.location.href;
+      uiInitialized = false;
       resetChatState();
       await loadChatHistory();
       if (window.location.href.includes("/submissions/detail/")) {
@@ -613,8 +700,11 @@ const mainObserver = new MutationObserver(async () => {
         });
       }
     }
-    createMainButton();
-    addSubmitListener();
+    if (!uiInitialized) {
+      createMainButton();
+      addSubmitListener();
+      uiInitialized = true;
+    }
   }
 });
 const submissionObserver = new MutationObserver(() => {
