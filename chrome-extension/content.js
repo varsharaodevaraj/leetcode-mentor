@@ -6,6 +6,9 @@ let myChart = null;
 let isLoading = false;
 let uiInitialized = false;
 
+// Add global variable for synced code
+let syncedCode = null;
+
 console.log(
   "LeetCode AI Mentor: content.js script is active (v11.3 - Final Version with Markdown)."
 );
@@ -126,12 +129,10 @@ function getProblemContext() {
   }
   const descriptionSelector = 'div[data-track-load="description_content"]';
   const descriptionEl = document.querySelector(descriptionSelector);
-  let userCode = "Could not read code from editor.";
-  const codeLines = document.querySelectorAll(".view-line");
-  if (codeLines.length > 0) {
-    const codeArray = Array.from(codeLines).map((line) => line.innerText);
-    userCode = codeArray.join("\n");
-  }
+  
+  // Better code detection from Monaco editor
+  let userCode = getCodeFromMonacoEditor();
+  
   return {
     problemTitle,
     problemDescription: descriptionEl
@@ -139,6 +140,50 @@ function getProblemContext() {
       : "Description not found",
     userCode,
   };
+}
+
+// New function to get code from Monaco editor
+function getCodeFromMonacoEditor() {
+  try {
+    // Method 1: Try Monaco editor models (most reliable)
+    if (window.monaco && window.monaco.editor) {
+      const models = window.monaco.editor.getModels();
+      if (models && models.length > 0) {
+        const code = models[0].getValue();
+        if (code && code.trim()) {
+          return code;
+        }
+      }
+    }
+
+    // Method 2: Try to find editor instances
+    if (window.monaco && window.monaco.editor) {
+      const editors = window.monaco.editor.getEditors();
+      for (const editor of editors) {
+        if (editor && typeof editor.getValue === 'function') {
+          const code = editor.getValue();
+          if (code && code.trim()) {
+            return code;
+          }
+        }
+      }
+    }
+
+    // Method 3: Fallback to DOM parsing
+    const codeLines = document.querySelectorAll(".view-line");
+    if (codeLines.length > 0) {
+      const codeArray = Array.from(codeLines).map((line) => line.innerText);
+      const code = codeArray.join("\n");
+      if (code && code.trim()) {
+        return code;
+      }
+    }
+
+    return "Could not read code from editor.";
+  } catch (error) {
+    console.error("Error reading code from editor:", error);
+    return "Could not read code from editor.";
+  }
 }
 
 function addMessageToChat(sender, message, isLoading = false) {
@@ -497,11 +542,14 @@ function createChatUI() {
   const chatContainer = document.createElement("div");
   chatContainer.id = "ai-chat-container";
   chatContainer.style.display = "flex";
-  chatContainer.innerHTML = `<div id="ai-chat-header">LeetCode AI Mentor</div><div id="ai-chat-tabs"><div class="ai-chat-tab active" data-tab="chat">Chat</div><div class="ai-chat-tab" data-tab="review">My Review List</div><div class="ai-chat-tab" data-tab="analytics">Analytics</div></div><div class="ai-chat-panel active" id="ai-chat-panel"><div id="ai-chat-messages"></div><div id="ai-quick-actions"><button class="quick-action-btn" data-prompt="Give me a small hint to get started">Get a Hint</button><button class="quick-action-btn" data-prompt="Explain the general approach">Explain Approach</button><button class="quick-action-btn" data-action="check_code">Check My Code</button></div><div id="ai-chat-input-container"><input id="ai-chat-input" type="text" placeholder="Or type your own question..."><button id="ai-chat-send-btn">Send</button></div></div><div class="ai-chat-panel" id="ai-review-list-panel"></div><div class="ai-chat-panel" id="ai-analytics-panel"></div>`;
+  chatContainer.innerHTML = `<div id="ai-chat-header">LeetCode AI Mentor</div><div id="ai-chat-tabs"><div class="ai-chat-tab active" data-tab="chat">Chat</div><div class="ai-chat-tab" data-tab="review">My Review List</div><div class="ai-chat-tab" data-tab="analytics">Analytics</div></div><div class="ai-chat-panel active" id="ai-chat-panel"><div id="ai-chat-messages"></div><div id="ai-quick-actions"><button class="quick-action-btn" data-prompt="Give me a small hint to get started">Get a Hint</button><button class="quick-action-btn" data-prompt="Explain the approach of the problem">Explain Approach</button><button class="quick-action-btn" id="clear-chat-btn">Clear Chat</button></div><div id="ai-chat-input-container"><input id="ai-chat-input" type="text" placeholder="Or type your own question..."><button id="ai-chat-send-btn">Send</button></div></div><div class="ai-chat-panel" id="ai-review-list-panel"></div><div class="ai-chat-panel" id="ai-analytics-panel"></div>`;
   document.body.appendChild(chatContainer);
+  
   const sendButton = document.getElementById("ai-chat-send-btn");
   const input = document.getElementById("ai-chat-input");
   const header = document.getElementById("ai-chat-header");
+  const clearChatBtn = document.getElementById("clear-chat-btn");
+  
   const handleTextInputSend = () => {
     const query = input.value.trim();
     if (query) {
@@ -513,20 +561,29 @@ function createChatUI() {
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") handleTextInputSend();
   });
+  
+  // Clear Chat functionality
+  clearChatBtn.addEventListener("click", () => {
+    if (confirm("Clear chat history for this problem?")) {
+      chatHistory = [];
+      const messagesContainer = document.getElementById("ai-chat-messages");
+      if (messagesContainer) {
+        messagesContainer.innerHTML = "";
+      }
+      saveChatHistory(); // Save empty history
+    }
+  });
+  
   makeDraggable(chatContainer, header);
   document.querySelectorAll(".quick-action-btn").forEach((button) => {
     button.addEventListener("click", () => {
-      const action = button.dataset.action;
-      if (action === "check_code") {
-        const context = getProblemContext();
-        const prompt = `Please check my current code for bugs or improvements\n\`\`\`\n${context.userCode}\n\`\`\``;
-        sendMessageToAI(prompt);
-      } else {
-        const prompt = button.dataset.prompt;
+      const prompt = button.dataset.prompt;
+      if (prompt) {
         sendMessageToAI(prompt);
       }
     });
   });
+  
   const tabs = chatContainer.querySelectorAll(".ai-chat-tab");
   const panels = chatContainer.querySelectorAll(".ai-chat-panel");
   tabs.forEach((tab) => {
