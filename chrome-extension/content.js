@@ -459,7 +459,7 @@ async function sendMessageToAI(userQuery) {
     let historyForAPI = [...chatHistory];
     if (chatHistory.filter((m) => m.role === "user").length === 1) {
       const context = getProblemContext();
-      const systemPrompt = `You are an expert LeetCode programming mentor...`;
+      const systemPrompt = `You are an expert LeetCode programming mentor. Your goal is to help users solve problems without giving them the direct answer. Stay strictly on the topic of the provided LeetCode problem. Do not provide the full code solution. Instead, guide the user with hints and Socratic questions.`;
       const fullContextPrompt = `CONTEXT:\n- Problem: ${
         context.problemTitle
       }\n- Description: ${context.problemDescription}\n- My Code: ${
