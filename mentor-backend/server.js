@@ -1,156 +1,151 @@
-// server.js (updated to use Hugging Face Router / Inference Providers chat endpoint)
-require('dotenv').config();
-const express = require('express');
-const fetch = require('node-fetch');
-const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
+const express = require("express");
+const rateLimit = require("express-rate-limit");
+const cors = require("cors");
 
 const app = express();
-app.use(helmet());
-app.use(express.json({ limit: '300kb' }));
+app.use(express.json({ limit: "1mb" }));
 
-app.use(rateLimit({
-  windowMs: 60 * 1000,
-  max: 60,
+const HF_API_KEY = process.env.HF_API_KEY;
+const HF_MODEL = process.env.HF_MODEL || "meta-llama/Llama-3.2-1B-Instruct";
+const PORT = process.env.PORT || 3000;
+const CORS_ORIGINS = process.env.CORS_ORIGINS || "*";
+const EXTENSION_API_KEY = process.env.EXTENSION_API_KEY || null;
+
+// Rate limiting (basic)
+const limiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 30, // 30 requests per minute per IP
   standardHeaders: true,
-  legacyHeaders: false
-}));
+  legacyHeaders: false,
+});
+app.use(limiter);
 
-const allowedOrigins = (process.env.CORS_ORIGINS || '*').split(',').map(s => s.trim());
+// Setup CORS
+const allowedOrigins = CORS_ORIGINS.split(",").map((s) => s.trim());
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // allow non-browser requests (curl/postman) where origin is undefined
+      if (!origin) return callback(null, true);
+      if (CORS_ORIGINS === "*" || allowedOrigins.includes("*") || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      return callback(new Error("CORS not allowed"), false);
+    },
+  })
+);
+
+// Optional check for extension key
 app.use((req, res, next) => {
-  const origin = req.headers.origin;
-  if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
-    res.setHeader('Access-Control-Allow-Origin', origin || '*');
+  if (!EXTENSION_API_KEY) return next();
+  const key = req.headers["x-extension-key"];
+  if (!key || key !== EXTENSION_API_KEY) {
+    return res.status(403).json({ error: "forbidden" });
   }
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   next();
 });
 
-const HF_API_KEY = process.env.HF_API_KEY;
-let HF_MODEL = process.env.HF_MODEL || 'gpt2'; // you can change this to an Inference-available chat model
-const PORT = process.env.PORT || 3000;
-
-if (!HF_API_KEY) {
-  console.warn('Warning: HF_API_KEY not set. Set it in .env before using the backend.');
-}
-
-// System message enforced server-side
-const SYSTEM_PROMPT = `SYSTEM: You are an expert LeetCode programming mentor. Only answer questions related to the provided LeetCode problem. If the user asks unrelated general knowledge or news questions, refuse and ask them to focus on the problem. Provide hints and guiding questions, but do NOT provide full working code solutions.`;
-
-// Basic off-topic heuristic (keeps user on-problem)
-function isLikelyOffTopic(text) {
-  if (!text) return false;
-  const off = ['capital', 'what is happening', 'news', 'who is', 'weather', 'president', 'country', 'india', 'britain', 'france'];
-  const s = text.toLowerCase();
-  return off.some(k => s.includes(k));
-}
-
-/**
- * Call Hugging Face Router chat completions endpoint.
- * Uses the OpenAI-compatible `/v1/chat/completions` interface.
- */
-async function callRouterChat(messages, model) {
-  const url = 'https://router.huggingface.co/v1/chat/completions';
-  const body = {
-    model,
-    messages,
-    max_tokens: 300,
-    temperature: 0.2,
-    stream: false
-  };
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${HF_API_KEY}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(body),
+// Helper to convert extension 'contents' to HF 'messages' (strings)
+function convertContentsToMessages(contents) {
+  // incoming `contents` expected format:
+  // [{ role: "user"|"system"|"model", parts: [{ text: "..." }] }, ...]
+  if (!Array.isArray(contents)) return null;
+  return contents.map((c) => {
+    const role = c.role === "user" ? "user" : c.role === "system" ? "system" : "assistant";
+    const text = Array.isArray(c.parts)
+      ? c.parts.map((p) => (p && p.text ? p.text : "")).join("\n")
+      : "";
+    return { role, content: text };
   });
-  return resp;
 }
 
-app.post('/api/generate', async (req, res) => {
+// /api/generate - main endpoint used by extension
+app.post("/api/generate", async (req, res) => {
   try {
-    const { contents } = req.body;
-    if (!contents) return res.status(400).json({ error: 'Missing contents' });
-
-    // Build last user quick-check for off-topic heuristic
-    const lastUser = [...contents].reverse().find(m => m.role === 'user');
-    const lastText = lastUser ? lastUser.parts.map(p => p.text).join('\n') : '';
-
-    if (isLikelyOffTopic(lastText)) {
-      return res.json({
-        text: "I can't help with general knowledge or news. I'm an on-problem coding mentor — please ask about the current LeetCode problem."
-      });
-    }
-
-    // Convert contents -> OpenAI-style messages array
-    // Start with server-side system prompt to ensure enforcement
-    const messages = [{ role: 'system', content: SYSTEM_PROMPT }];
-
-    // Append the provided contents, mapping roles:
-    // 'system' -> system, 'user' -> user, 'model' or 'assistant' -> assistant
-    for (const item of contents) {
-      const text = (item.parts || []).map(p => p.text).join('\n');
-      if (!text || text.trim() === '') continue;
-      const roleLower = (item.role || '').toLowerCase();
-      if (roleLower === 'system') messages.push({ role: 'system', content: text });
-      else if (roleLower === 'user') messages.push({ role: 'user', content: text });
-      else if (roleLower === 'model' || roleLower === 'assistant' || roleLower === 'ai') messages.push({ role: 'assistant', content: text });
-      else messages.push({ role: 'user', content: text });
-    }
-
     if (!HF_API_KEY) {
-      return res.json({ text: 'Server not configured with HF_API_KEY. Please set it in environment.' });
+      return res.status(500).json({ error: "Server not configured with HF_API_KEY." });
     }
 
-    // Try to call the configured model via router (chat completions)
-    let resp = await callRouterChat(messages, HF_MODEL);
+    const body = req.body || {};
+    const { contents, model: clientModel } = body;
 
-    // If model is gated/unavailable, the router may return 400/404/410 etc.
-    // For dev convenience, fallback to 'gpt2' hosted via router if available.
-    if (!resp.ok && resp.status === 410) {
-      console.warn(`Model ${HF_MODEL} returned 410; retrying with 'gpt2' as fallback`);
-      HF_MODEL = 'gpt2';
-      resp = await callRouterChat(messages, HF_MODEL);
+    // convert contents -> messages for HF router
+    let messages = convertContentsToMessages(contents || []);
+    if (!messages) {
+      return res.status(400).json({ error: "Invalid request body: contents required." });
     }
 
+    // allow overriding model by env or client (prefers env)
+    const modelToUse = process.env.HF_MODEL || clientModel || HF_MODEL;
+
+    const hfUrl = "https://router.huggingface.co/v1/chat/completions";
+    const hfBody = {
+      model: modelToUse,
+      messages: messages.map((m) => ({ role: m.role, content: m.content })),
+      max_tokens: 512,
+    };
+
+    const resp = await fetch(hfUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${HF_API_KEY}`,
+      },
+      body: JSON.stringify(hfBody),
+    });
+
+    const data = await resp.json();
+
+    // handle HF errors
     if (!resp.ok) {
-      const errorText = await resp.text();
-      console.error('Router HF error', resp.status, errorText);
-      return res.status(502).json({ error: `Model error ${resp.status}`, detail: errorText });
+      return res.status(resp.status).json({ error: "Model error", detail: data });
     }
 
-    const j = await resp.json();
-
-    // Router returns OpenAI-compatible response; extract assistant content
-    // Try common shapes: choices[0].message.content, choices[0].message, or completion.choices[0].message
-    let assistantText = '';
-    try {
-      if (j.choices && Array.isArray(j.choices) && j.choices.length > 0) {
-        const first = j.choices[0];
-        if (first.message && (first.message.content || first.message)) {
-          assistantText = typeof first.message.content === 'string' ? first.message.content : (first.message.content?.value || JSON.stringify(first.message));
-        } else if (first.text) {
-          assistantText = first.text;
+    // HF router returns choices[0].message.content OR choices[0].message.content[0] depending on model
+    let text = "";
+    if (data?.choices && data.choices.length > 0) {
+      const choice = data.choices[0];
+      if (choice.message) {
+        // latest router returns message.content possibly as string or object structure
+        // handle string or {content}
+        const msg = choice.message;
+        if (typeof msg.content === "string") text = msg.content;
+        else if (msg.content && typeof msg.content === "object") {
+          // sometimes content is { parts: [ { text: "..." } ] }
+          if (Array.isArray(msg.content.parts)) {
+            text = msg.content.parts.map((p) => p.text || "").join("\n");
+          } else {
+            text = JSON.stringify(msg.content);
+          }
+        } else if (msg.content === undefined && msg.text) {
+          text = msg.text;
         } else {
-          assistantText = JSON.stringify(first);
+          text = JSON.stringify(msg);
         }
-      } else if (j.error) {
-        assistantText = `Model error: ${j.error}`;
+      } else if (choice.text) {
+        text = choice.text;
       } else {
-        assistantText = JSON.stringify(j);
+        text = JSON.stringify(choice);
       }
-    } catch (e) {
-      assistantText = JSON.stringify(j);
+    } else if (typeof data?.text === "string") {
+      text = data.text;
+    } else {
+      text = JSON.stringify(data);
     }
 
-    return res.json({ text: assistantText || 'Model returned no text.' });
+    return res.json({ text });
   } catch (err) {
-    console.error('Server error', err);
-    return res.status(500).json({ error: 'internal server error' });
+    console.error("Server error:", err);
+    return res.status(500).json({ error: "server_error", detail: err.message || String(err) });
   }
 });
 
-app.get('/health', (req, res) => res.json({ ok: true, model: HF_MODEL }));
-app.listen(PORT, () => console.log(`Mentor backend listening on ${PORT} (model=${HF_MODEL})`));
+// Health
+app.get("/", (req, res) => {
+  res.send("Mentor backend is up.");
+});
+
+app.listen(PORT, () => {
+  console.log(`Mentor backend listening on ${PORT} (model=${HF_MODEL})`);
+  console.log("Available at your primary URL (Render will show it)");
+});

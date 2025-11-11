@@ -291,22 +291,34 @@ async function renderReviewList() {
     });
   });
 }
-async function callGeminiAPI(apiKey, requestBody) {
-  // const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
-  const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite-preview-06-17:generateContent?key=${apiKey}`;
-  const response = await fetch(API_URL, {
+// content.js — replace callGeminiAPI function with this
+async function callGeminiAPI(apiKeyIgnoredHere, requestBody) {
+  // <-- UPDATE this to your Render URL
+  const BACKEND_URL = "https://mentor-backend-drv0.onrender.com/api/generate";
+
+  const headers = { "Content-Type": "application/json" };
+
+  // Option A (quick test): hardcode the extension key (NOT for public extension)
+  // headers["x-extension-key"] = "ext_secret_abc123";
+
+  // Option B (better): try to read stored key from chrome.storage (recommended)
+  // If you saved EXTENSION_KEY in extension options, this will pick it up.
+  const storage = await LocalStorage.get("extensionKey");
+  const extKey = storage && storage.extensionKey ? storage.extensionKey : null;
+  if (extKey) headers["x-extension-key"] = extKey;
+
+  const resp = await fetch(BACKEND_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify(requestBody),
   });
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(
-      `API Error: ${response.status} - ${errorData.error.message}`
-    );
+
+  if (!resp.ok) {
+    const txt = await resp.text();
+    throw new Error(`Backend error ${resp.status}: ${txt}`);
   }
-  const data = await response.json();
-  return data.candidates[0].content.parts[0].text;
+  const data = await resp.json();
+  return data.text;
 }
 async function getRecommendations(apiKey, problemTitle) {
   if (problemTitle === "Title not found") return;
