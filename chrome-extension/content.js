@@ -1,15 +1,68 @@
-const BACKEND_URL = "https://mentor-backend-drv0.onrender.com/api/generate";
+// content.js - LeetCode AI Mentor (proxy mode)
+// Full file with improved renderReviewList(), problem normalization, and single-arrow fix.
 
+// -------- CONFIG --------
+const BACKEND_URL = "https://mentor-backend-drv0.onrender.com/api/generate"; 
+const RECOMMENDATION_THRESHOLD = 3; // number of *helpful* backend interactions before requesting recommendations
+
+// -------- Global state --------
 let chatHistory = [];
 let messageCounter = 0;
 let currentProblemURL = window.location.href;
 let isLoading = false;
 let uiInitialized = false;
 
-const RECOMMENDATION_THRESHOLD = 3;
-
 console.log("LeetCode AI Mentor: content.js active (proxy mode).");
 
+// -------- inject runtime CSS (remove extra arrow and style the chevron) --------
+function injectStyles() {
+  const css = `
+    /* Remove any theme pseudo-element arrow on review-topic-header so only our chevron shows */
+    .review-topic-header::after { content: none !important; }
+
+    /* Style the chevron we inject */
+    .review-topic-chevron {
+      display: inline-block;
+      margin-left: 8px;
+      font-size: 14px;
+      color: #9b59ff; /* purple */
+      transition: transform 0.18s ease;
+    }
+    .review-topic-header.active .review-topic-chevron {
+      transform: rotate(180deg);
+    }
+
+    /* small layout niceties */
+    .review-topic-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+    }
+    .review-topic-header .review-topic-chevron {
+      margin-left: 12px;
+    }
+
+    /* ensure review list items look consistent */
+    .review-list-container { padding: 8px 12px; }
+    .review-topic-container { margin-bottom: 12px; }
+    .review-problem-list { padding: 0; margin: 8px 0 0 0; list-style: none; overflow: hidden; transition: max-height 0.2s ease; }
+    .review-problem-row { display: flex; justify-content: space-between; padding: 10px 8px; border-bottom: 1px solid rgba(255,255,255,0.03); }
+    .review-problem-left { flex: 1; }
+    .review-problem-right { margin-left: 10px; display:flex; align-items:center; }
+    .mark-done-btn { background: transparent; border: 1px solid #2ecc71; color: #2ecc71; padding: 6px 10px; border-radius: 18px; cursor: pointer; }
+    .review-problem-link { color: #9fb0ff; text-decoration: none; }
+    .review-problem-text { color: #ccc; }
+  `;
+  const style = document.createElement("style");
+  style.setAttribute("data-injected-by", "ai-mentor-content");
+  style.appendChild(document.createTextNode(css));
+  document.head.appendChild(style);
+}
+// inject styles immediately
+injectStyles();
+
+// -------- Storage helpers --------
 const SessionStorage = {
   get: (keys) => new Promise((resolve) => chrome.storage.session.get(keys, (r) => resolve(r))),
   set: (obj) => new Promise((resolve) => chrome.storage.session.set(obj, resolve)),
@@ -19,6 +72,7 @@ const LocalStorage = {
   set: (obj) => new Promise((resolve) => chrome.storage.local.set(obj, resolve)),
 };
 
+// -------- persistence helpers: solved & review list --------
 async function saveSolvedProblem(problemTitle, topic) {
   let { solvedProblems } = await LocalStorage.get("solvedProblems");
   solvedProblems = solvedProblems || [];
@@ -27,6 +81,7 @@ async function saveSolvedProblem(problemTitle, topic) {
     await LocalStorage.set({ solvedProblems });
   }
 }
+
 async function saveReviewItems(concept, problems, sourceProblem) {
   let { reviewList } = await LocalStorage.get("reviewList");
   reviewList = reviewList || [];
@@ -53,7 +108,11 @@ async function updateNotificationDot() {
   let count = 0;
   if (reviewList) {
     const uniqueProblems = new Set();
-    reviewList.forEach((item) => item.problems.forEach((p) => uniqueProblems.add(p.url)));
+    reviewList.forEach((item) => item.problems.forEach((p) => {
+      const np = normalizeProblemObject(p);
+      if (np && np.url) uniqueProblems.add(np.url);
+      else if (np && np.title) uniqueProblems.add(`title:${np.title}`);
+    }));
     count = uniqueProblems.size;
   }
   if (count > 0) {
@@ -65,6 +124,7 @@ async function updateNotificationDot() {
   }
 }
 
+// -------- Chat history keyed per problem --------
 function getProblemKeyFromURL(url) {
   const match = url.match(/leetcode\.com\/problems\/([^/]+)/);
   return match ? `chatHistory_${match[1]}` : null;
@@ -89,6 +149,7 @@ async function loadChatHistory() {
   }
 }
 
+// -------- Problem context extraction --------
 function getProblemContext() {
   const titleSelectors = [
     'div[data-cy="question-title"]',
@@ -144,6 +205,7 @@ function getCodeFromMonacoEditor() {
   }
 }
 
+// -------- UI: render messages --------
 function addMessageToChat(sender, message, isLoading = false) {
   const messagesContainer = document.getElementById("ai-chat-messages");
   if (!messagesContainer) return null;
@@ -153,7 +215,7 @@ function addMessageToChat(sender, message, isLoading = false) {
     messageDiv.classList.add("loading");
     messageDiv.textContent = "Thinking...";
   } else {
-    let sanitizedMessage = message.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    let sanitizedMessage = String(message || "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     sanitizedMessage = sanitizedMessage.replace(
       /```(java|javascript|python|c\+\+|c#|kotlin|swift)?\s*([\s\S]*?)```/g,
       "<pre><code>$2</code></pre>"
@@ -174,47 +236,181 @@ function addMessageToChat(sender, message, isLoading = false) {
   return messageDiv;
 }
 
+// -------- Normalize problems utilities (robust) --------
+function normalizeProblemObject(p) {
+  // Accepts various shapes: { title, url }, { name, link }, simple strings, or partial objects.
+  if (!p) return null;
+  let title = "";
+  let url = "";
+
+  if (typeof p === "string") {
+    title = p.trim();
+  } else if (typeof p === "object") {
+    title = p.title || p.name || p.label || p.text || "";
+    url = p.url || p.link || p.href || "";
+    // sometimes model returns nested structure
+    if (!title && p.problemTitle) title = p.problemTitle;
+  }
+
+  // If url is present but relative path (e.g., /problems/two-sum/), convert to full
+  if (url && url.startsWith("/")) {
+    url = `https://leetcode.com${url}`;
+  }
+
+  // If url missing but title present, create a best-effort LeetCode problems URL
+  if (!url && title) {
+    // create slug from title
+    const slug = title
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/(^-|-$)/g, "");
+    url = `https://leetcode.com/problems/${encodeURIComponent(slug)}/`;
+  }
+
+  // If title missing but url present, infer title from URL slug
+  if (!title && url) {
+    const m = url.match(/\/problems\/([^/]+)/);
+    if (m && m[1]) {
+      const inferred = decodeURIComponent(m[1]).replace(/-/g, " ");
+      title = inferred.replace(/\b\w/g, (c) => c.toUpperCase());
+    } else {
+      title = url;
+    }
+  }
+
+  title = String(title || "").trim();
+  url = String(url || "").trim();
+
+  if (!title && !url) return null;
+  return { title, url };
+}
+
+// -------- Render review list UI (FIXED & robust) --------
 async function renderReviewList() {
   const panel = document.getElementById("ai-review-list-panel");
   if (!panel) return;
   const { reviewList } = await LocalStorage.get("reviewList");
   if (!reviewList || reviewList.length === 0) {
     panel.innerHTML = '<p style="padding: 15px;">Your review list is empty.</p>';
+    updateNotificationDot();
     return;
   }
+
+  // Build topics => normalized, deduped problem lists
   const topics = {};
-  reviewList.forEach((item) => {
-    if (!topics[item.concept]) topics[item.concept] = [];
-    item.problems.forEach((problem) => {
-      if (!topics[item.concept].some((p) => p.url === problem.url)) topics[item.concept].push(problem);
-    });
-  });
-  let html = "";
-  for (const topic in topics) {
-    html += `<div class="review-topic-container"><div class="review-topic-header" data-topic="${topic}">${topic}</div><ul class="review-problem-list" data-topic-list="${topic}">`;
-    topics[topic].forEach((problem) => {
-      html += `<li data-url="${problem.url}"><a href="${problem.url}" target="_blank">${problem.title}</a><button class="mark-done-btn" data-url="${problem.url}" data-title="${problem.title}" data-concept="${topic}">Mark as Done</button></li>`;
-    });
-    html += `</ul></div>`;
+  for (const item of reviewList) {
+    const concept = item.concept || "Misc";
+    if (!topics[concept]) topics[concept] = [];
+    const problems = Array.isArray(item.problems) ? item.problems : [];
+    for (const rawProb of problems) {
+      const np = normalizeProblemObject(rawProb);
+      if (!np) continue;
+      // avoid duplicates by URL in that concept
+      if (!topics[concept].some((p) => p.url === np.url)) topics[concept].push(np);
+    }
   }
-  panel.innerHTML = html;
+
+  // Produce HTML using DOM creation for safety (avoid raw concatenation)
+  const container = document.createElement("div");
+  container.className = "review-list-container";
+  for (const topic of Object.keys(topics)) {
+    const problems = topics[topic];
+    // Skip empty topics
+    if (!problems || problems.length === 0) continue;
+
+    const topicContainer = document.createElement("div");
+    topicContainer.className = "review-topic-container";
+
+    const header = document.createElement("div");
+    header.className = "review-topic-header";
+    header.dataset.topic = topic;
+    header.textContent = topic;
+
+    // chevron / indicator (only one - CSS removed pseudo)
+    const chevron = document.createElement("span");
+    chevron.className = "review-topic-chevron";
+    chevron.textContent = "▴";
+    header.appendChild(chevron);
+
+    const list = document.createElement("ul");
+    list.className = "review-problem-list";
+    list.dataset.topicList = topic;
+    list.style.maxHeight = "0px"; // start collapsed
+
+    for (const prob of problems) {
+      const li = document.createElement("li");
+      li.dataset.url = prob.url;
+
+      const left = document.createElement("div");
+      left.className = "review-problem-left";
+
+      if (prob.url) {
+        const a = document.createElement("a");
+        a.href = prob.url;
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        a.textContent = prob.title || prob.url;
+        a.className = "review-problem-link";
+        left.appendChild(a);
+      } else {
+        const span = document.createElement("span");
+        span.className = "review-problem-text";
+        span.textContent = prob.title || "Untitled problem";
+        left.appendChild(span);
+      }
+
+      const btn = document.createElement("button");
+      btn.className = "mark-done-btn";
+      btn.dataset.url = prob.url;
+      btn.dataset.title = prob.title;
+      btn.dataset.concept = topic;
+      btn.textContent = "Mark as Done";
+
+      const right = document.createElement("div");
+      right.className = "review-problem-right";
+      right.appendChild(btn);
+
+      li.appendChild(left);
+      li.appendChild(right);
+      list.appendChild(li);
+    }
+
+    topicContainer.appendChild(header);
+    topicContainer.appendChild(list);
+    container.appendChild(topicContainer);
+  }
+
+  panel.innerHTML = ""; // wipe existing
+  panel.appendChild(container);
+  updateNotificationDot();
+
+  // Attach handlers
   panel.querySelectorAll(".review-topic-header").forEach((header) => {
     header.addEventListener("click", () => {
       header.classList.toggle("active");
       const problemList = panel.querySelector(`[data-topic-list="${header.dataset.topic}"]`);
-      if (problemList.style.maxHeight) problemList.style.maxHeight = null;
-      else problemList.style.maxHeight = problemList.scrollHeight + "px";
+      if (!problemList) return;
+      if (problemList.style.maxHeight && problemList.style.maxHeight !== "0px") {
+        problemList.style.maxHeight = "0px";
+      } else {
+        problemList.style.maxHeight = problemList.scrollHeight + "px";
+      }
     });
   });
+
   panel.querySelectorAll(".mark-done-btn").forEach((button) => {
     button.addEventListener("click", async (e) => {
       e.stopPropagation();
       const { url: urlToRemove, title, concept } = e.target.dataset;
       await saveSolvedProblem(title, concept);
       let { reviewList } = await LocalStorage.get("reviewList");
+      reviewList = reviewList || [];
       let updatedReviewList = [];
       reviewList.forEach((item) => {
-        item.problems = item.problems.filter((p) => p.url !== urlToRemove);
+        item.problems = (item.problems || []).filter((p) => {
+          const np = normalizeProblemObject(p);
+          return !(np && np.url === urlToRemove);
+        });
         if (item.problems.length > 0) updatedReviewList.push(item);
       });
       await LocalStorage.set({ reviewList: updatedReviewList });
@@ -224,6 +420,7 @@ async function renderReviewList() {
   });
 }
 
+// -------- call backend (proxy) --------
 async function callBackend(requestBody) {
   const resp = await fetch(BACKEND_URL, {
     method: "POST",
@@ -235,9 +432,11 @@ async function callBackend(requestBody) {
     throw new Error(`Backend error ${resp.status}: ${txt}`);
   }
   const data = await resp.json();
+  // server expects to return { text: "..." } or similar
   return data.text || data;
 }
 
+// -------- utilities: robust JSON extraction for recommendations --------
 function extractJSONFromText(text) {
   if (!text || typeof text !== "string") return null;
   const jsonArrayMatch = text.match(/\[[\s\S]*\]/);
@@ -256,6 +455,7 @@ function extractJSONFromText(text) {
   }
 }
 
+// -------- recommendations and topic inference --------
 async function getRecommendations(problemTitle) {
   if (problemTitle === "Title not found") return;
   try {
@@ -284,7 +484,7 @@ async function getRecommendations(problemTitle) {
         }
       }
     }
-    
+
     if (!Array.isArray(recommendations) || recommendations.length === 0) {
       const loadingMessage = document.querySelector(".ai-message.loading");
       if (loadingMessage) loadingMessage.remove();
@@ -292,10 +492,13 @@ async function getRecommendations(problemTitle) {
       return;
     }
 
-    await saveReviewItems(concept.trim(), recommendations, problemTitle);
+    // Normalize each recommended problem to reduce downstream rendering issues
+    const normalized = recommendations.map((r) => normalizeProblemObject(r)).filter(Boolean);
+
+    await saveReviewItems(concept.trim(), normalized, problemTitle);
     const loadingMessage = document.querySelector(".ai-message.loading");
     if (loadingMessage) loadingMessage.remove();
-    addMessageToChat("ai", `Saved ${recommendations.length} recommended problems for review.`);
+    addMessageToChat("ai", `Saved ${normalized.length} recommended problems for review.`);
   } catch (error) {
     console.error("Failed to get recommendations:", error);
     const loadingMessage = document.querySelector(".ai-message.loading");
@@ -307,6 +510,7 @@ async function getRecommendations(problemTitle) {
   }
 }
 
+// -------- get topic for problem (via backend) --------
 async function getTopicForProblem(problemTitle) {
   let { topicCache } = await LocalStorage.get("topicCache");
   topicCache = topicCache || {};
@@ -321,22 +525,20 @@ async function getTopicForProblem(problemTitle) {
   return cleanTopic;
 }
 
+// -------- detect general-knowledge / off-topic requests --------
 function isOffTopicQuery(query) {
   if (!query || typeof query !== "string") return false;
   const offTopicPatterns = /\b(capital of|what is happening|what's happening|who is|who's|news|today|current|weather|time in|date in|president|prime minister|capital|population|currency|latest|breaking)\b/i;
   return offTopicPatterns.test(query);
 }
 
+// -------- helper patterns for local handling (greeting) --------
 function greetingOnly(q) {
   if (!q) return false;
   return /^\s*(hi|hello|hey|hiya|good morning|good afternoon|good evening|howdy)[.!?]?\s*$/i.test(q);
 }
-function shortHintPrompt(q) {
-  if (!q) return false;
-  // match exact phrasing from quick-action buttons or common short hint requests
-  return /^\s*(give me a small hint to get started|small hint|give me a small hint|short hint)\s*$/i.test(q);
-}
 
+// -------- Determine if a user query is a "helpful" request (should increment messageCounter) --------
 function isHelpfulQuery(q) {
   if (!q || typeof q !== "string") return false;
   const s = q.toLowerCase();
@@ -361,39 +563,7 @@ function isHelpfulQuery(q) {
   return false;
 }
 
-const GENERIC_SHORT_HINTS = [
-  "Try simulating the pattern on a small example and track which row each character goes to — that usually reveals the pattern.",
-  "Think about how indices repeat across rows; identifying the cycle length helps group characters efficiently.",
-  "Consider building arrays per row and appending characters as you walk the string — it's simple and effective.",
-  "Work through the first 6–8 characters by hand and write down row numbers; you'll see the repeating pattern.",
-  "Map character indices to rows with a variable that moves up/down; that avoids complicated index math."
-];
-
-async function pickShortHint(problemTitle, inferredTopic) {
-  const candidates = GENERIC_SHORT_HINTS.slice();
-  if (inferredTopic) {
-    candidates.unshift(`Focus on the core concept: ${inferredTopic}. For a quick hint, simulate a short example and watch how indices map to rows.`);
-  }
-  const problemKey = getProblemKeyFromURL(window.location.href) || "global";
-  const lastKey = `lastShortHint_${problemKey}`;
-  let obj = await LocalStorage.get(lastKey);
-  let lastHint = obj ? obj[lastKey] : null;
-  lastHint = lastHint || null;
-
-  let pick = null;
-  for (let i = 0; i < 6; i++) {
-    const idx = Math.floor(Math.random() * candidates.length);
-    if (candidates[idx] !== lastHint) {
-      pick = candidates[idx];
-      break;
-    }
-  }
-  if (!pick) pick = candidates[0];
-
-  await LocalStorage.set({ [lastKey]: pick });
-  return pick;
-}
-
+// -------- main send function (build system prompt and call backend) --------
 async function sendMessageToAI(userQuery) {
   if (isLoading || !userQuery) return;
 
@@ -408,27 +578,6 @@ async function sendMessageToAI(userQuery) {
     return;
   }
 
-  if (shortHintPrompt(userQuery)) {
-    addMessageToChat("user", userQuery);
-    chatHistory.push({ role: "user", parts: [{ text: userQuery }] });
-
-    const ctx = getProblemContext();
-    let inferredTopic = null;
-    try {
-      inferredTopic = await getTopicForProblem(ctx.problemTitle);
-    } catch (e) {
-      console.warn("Topic inference failed for short hint:", e);
-    }
-
-    const hintText = await pickShortHint(ctx.problemTitle, inferredTopic);
-    const hintWithPrompt = `${hintText} Would you like a step-by-step hint or an example?`;
-
-    addMessageToChat("ai", hintWithPrompt);
-    chatHistory.push({ role: "model", parts: [{ text: hintWithPrompt }] });
-    await saveChatHistory();
-    return;
-  }
-  
   if (isOffTopicQuery(userQuery)) {
     addMessageToChat("user", userQuery);
     addMessageToChat("ai", "Sorry — I only provide help related to the current LeetCode problem (hints, approach, debugging). I can't answer general knowledge or news questions here.");
@@ -483,6 +632,7 @@ async function sendMessageToAI(userQuery) {
   }
 }
 
+// -------- UI creation and interaction (Chat + Review only) --------
 function createMainButton() {
   if (document.getElementById("ai-mentor-btn")) return;
   const mentorButton = document.createElement("button");
@@ -627,6 +777,7 @@ function addSubmitListener() {
   }
 }
 
+// -------- observers to initialize UI on problem pages --------
 const mainObserver = new MutationObserver(async () => {
   const hookSelector = 'div[data-track-load="description_content"]';
   const hookElement = document.querySelector(hookSelector);
@@ -661,6 +812,7 @@ if (window.location.href.includes("/submissions/detail/")) {
   submissionObserver.observe(document.body, { childList: true, subtree: true });
 }
 
+// allow background open options
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "openOptionsPage") chrome.runtime.openOptionsPage();
 });
