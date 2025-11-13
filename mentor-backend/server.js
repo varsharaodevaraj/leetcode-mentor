@@ -11,7 +11,7 @@ const PORT = process.env.PORT || 3000;
 const CORS_ORIGINS = process.env.CORS_ORIGINS || "*";
 const EXTENSION_API_KEY = process.env.EXTENSION_API_KEY || null;
 
-// Rate limiting (basic)
+// Rate limiting
 const limiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
   max: 30, // 30 requests per minute per IP
@@ -25,7 +25,6 @@ const allowedOrigins = CORS_ORIGINS.split(",").map((s) => s.trim());
 app.use(
   cors({
     origin: (origin, callback) => {
-      // allow non-browser requests (curl/postman) where origin is undefined
       if (!origin) return callback(null, true);
       if (CORS_ORIGINS === "*" || allowedOrigins.includes("*") || allowedOrigins.includes(origin)) {
         return callback(null, true);
@@ -35,7 +34,6 @@ app.use(
   })
 );
 
-// Optional check for extension key
 app.use((req, res, next) => {
   if (!EXTENSION_API_KEY) return next();
   const key = req.headers["x-extension-key"];
@@ -45,10 +43,8 @@ app.use((req, res, next) => {
   next();
 });
 
-// Helper to convert extension 'contents' to HF 'messages' (strings)
+
 function convertContentsToMessages(contents) {
-  // incoming `contents` expected format:
-  // [{ role: "user"|"system"|"model", parts: [{ text: "..." }] }, ...]
   if (!Array.isArray(contents)) return null;
   return contents.map((c) => {
     const role = c.role === "user" ? "user" : c.role === "system" ? "system" : "assistant";
@@ -59,7 +55,6 @@ function convertContentsToMessages(contents) {
   });
 }
 
-// /api/generate - main endpoint used by extension
 app.post("/api/generate", async (req, res) => {
   try {
     if (!HF_API_KEY) {
@@ -69,13 +64,11 @@ app.post("/api/generate", async (req, res) => {
     const body = req.body || {};
     const { contents, model: clientModel } = body;
 
-    // convert contents -> messages for HF router
     let messages = convertContentsToMessages(contents || []);
     if (!messages) {
       return res.status(400).json({ error: "Invalid request body: contents required." });
     }
 
-    // allow overriding model by env or client (prefers env)
     const modelToUse = process.env.HF_MODEL || clientModel || HF_MODEL;
 
     const hfUrl = "https://router.huggingface.co/v1/chat/completions";
@@ -96,22 +89,17 @@ app.post("/api/generate", async (req, res) => {
 
     const data = await resp.json();
 
-    // handle HF errors
     if (!resp.ok) {
       return res.status(resp.status).json({ error: "Model error", detail: data });
     }
 
-    // HF router returns choices[0].message.content OR choices[0].message.content[0] depending on model
     let text = "";
     if (data?.choices && data.choices.length > 0) {
       const choice = data.choices[0];
       if (choice.message) {
-        // latest router returns message.content possibly as string or object structure
-        // handle string or {content}
         const msg = choice.message;
         if (typeof msg.content === "string") text = msg.content;
         else if (msg.content && typeof msg.content === "object") {
-          // sometimes content is { parts: [ { text: "..." } ] }
           if (Array.isArray(msg.content.parts)) {
             text = msg.content.parts.map((p) => p.text || "").join("\n");
           } else {
@@ -140,7 +128,6 @@ app.post("/api/generate", async (req, res) => {
   }
 });
 
-// Health
 app.get("/", (req, res) => {
   res.send("Mentor backend is up.");
 });

@@ -1,43 +1,28 @@
-// Global variables
+const BACKEND_URL = "https://mentor-backend-drv0.onrender.com/api/generate";
+
 let chatHistory = [];
 let messageCounter = 0;
 let currentProblemURL = window.location.href;
-let myChart = null;
 let isLoading = false;
 let uiInitialized = false;
 
-// Add global variable for synced code
-let syncedCode = null;
+const RECOMMENDATION_THRESHOLD = 3;
 
-console.log(
-  "LeetCode AI Mentor: content.js script is active (v11.3 - Final Version with Markdown)."
-);
+console.log("LeetCode AI Mentor: content.js active (proxy mode).");
 
-// --- STORAGE HELPER FUNCTIONS ---
 const SessionStorage = {
-  get: (keys) =>
-    new Promise((resolve) =>
-      chrome.storage.session.get(keys, (result) => resolve(result))
-    ),
-  set: (obj) =>
-    new Promise((resolve) => chrome.storage.session.set(obj, resolve)),
+  get: (keys) => new Promise((resolve) => chrome.storage.session.get(keys, (r) => resolve(r))),
+  set: (obj) => new Promise((resolve) => chrome.storage.session.set(obj, resolve)),
 };
 const LocalStorage = {
-  get: (keys) =>
-    new Promise((resolve) =>
-      chrome.storage.local.get(keys, (result) => resolve(result))
-    ),
-  set: (obj) =>
-    new Promise((resolve) => chrome.storage.local.set(obj, resolve)),
+  get: (keys) => new Promise((resolve) => chrome.storage.local.get(keys, (r) => resolve(r))),
+  set: (obj) => new Promise((resolve) => chrome.storage.local.set(obj, resolve)),
 };
+
 async function saveSolvedProblem(problemTitle, topic) {
   let { solvedProblems } = await LocalStorage.get("solvedProblems");
   solvedProblems = solvedProblems || [];
-  if (
-    problemTitle &&
-    topic &&
-    !solvedProblems.some((p) => p.title === problemTitle)
-  ) {
+  if (problemTitle && topic && !solvedProblems.some((p) => p.title === problemTitle)) {
     solvedProblems.push({ title: problemTitle, topic: topic.trim() });
     await LocalStorage.set({ solvedProblems });
   }
@@ -45,13 +30,10 @@ async function saveSolvedProblem(problemTitle, topic) {
 async function saveReviewItems(concept, problems, sourceProblem) {
   let { reviewList } = await LocalStorage.get("reviewList");
   reviewList = reviewList || [];
-  if (typeof reviewList === "object" && !Array.isArray(reviewList)) {
-    reviewList = [];
-  }
+  if (typeof reviewList === "object" && !Array.isArray(reviewList)) reviewList = [];
   const newEntry = { concept, source: sourceProblem, problems };
   const isDuplicate = reviewList.some(
-    (item) =>
-      item.source === newEntry.source && item.concept === newEntry.concept
+    (item) => item.source === newEntry.source && item.concept === newEntry.concept
   );
   if (!isDuplicate) {
     reviewList.push(newEntry);
@@ -71,9 +53,7 @@ async function updateNotificationDot() {
   let count = 0;
   if (reviewList) {
     const uniqueProblems = new Set();
-    reviewList.forEach((item) => {
-      item.problems.forEach((p) => uniqueProblems.add(p.url));
-    });
+    reviewList.forEach((item) => item.problems.forEach((p) => uniqueProblems.add(p.url)));
     count = uniqueProblems.size;
   }
   if (count > 0) {
@@ -85,16 +65,13 @@ async function updateNotificationDot() {
   }
 }
 
-// --- Chat History Management ---
 function getProblemKeyFromURL(url) {
   const match = url.match(/leetcode\.com\/problems\/([^/]+)/);
   return match ? `chatHistory_${match[1]}` : null;
 }
 async function saveChatHistory() {
   const problemKey = getProblemKeyFromURL(window.location.href);
-  if (problemKey) {
-    await LocalStorage.set({ [problemKey]: chatHistory });
-  }
+  if (problemKey) await LocalStorage.set({ [problemKey]: chatHistory });
 }
 async function loadChatHistory() {
   const problemKey = getProblemKeyFromURL(window.location.href);
@@ -112,7 +89,6 @@ async function loadChatHistory() {
   }
 }
 
-// --- UI AND LOGIC FUNCTIONS ---
 function getProblemContext() {
   const titleSelectors = [
     'div[data-cy="question-title"]',
@@ -129,56 +105,38 @@ function getProblemContext() {
   }
   const descriptionSelector = 'div[data-track-load="description_content"]';
   const descriptionEl = document.querySelector(descriptionSelector);
-  
-  // Better code detection from Monaco editor
   let userCode = getCodeFromMonacoEditor();
-  
   return {
     problemTitle,
-    problemDescription: descriptionEl
-      ? descriptionEl.innerHTML
-      : "Description not found",
+    problemDescription: descriptionEl ? descriptionEl.innerHTML : "Description not found",
     userCode,
   };
 }
 
-// New function to get code from Monaco editor
 function getCodeFromMonacoEditor() {
   try {
-    // Method 1: Try Monaco editor models (most reliable)
     if (window.monaco && window.monaco.editor) {
-      const models = window.monaco.editor.getModels();
+      const models = window.monaco.editor.getModels?.();
       if (models && models.length > 0) {
         const code = models[0].getValue();
-        if (code && code.trim()) {
-          return code;
-        }
+        if (code && code.trim()) return code;
       }
-    }
-
-    // Method 2: Try to find editor instances
-    if (window.monaco && window.monaco.editor) {
-      const editors = window.monaco.editor.getEditors();
-      for (const editor of editors) {
-        if (editor && typeof editor.getValue === 'function') {
-          const code = editor.getValue();
-          if (code && code.trim()) {
-            return code;
+      const editors = window.monaco.editor.getEditors?.();
+      if (editors && editors.length) {
+        for (const editor of editors) {
+          if (editor && typeof editor.getValue === "function") {
+            const code = editor.getValue();
+            if (code && code.trim()) return code;
           }
         }
       }
     }
-
-    // Method 3: Fallback to DOM parsing
     const codeLines = document.querySelectorAll(".view-line");
     if (codeLines.length > 0) {
       const codeArray = Array.from(codeLines).map((line) => line.innerText);
       const code = codeArray.join("\n");
-      if (code && code.trim()) {
-        return code;
-      }
+      if (code && code.trim()) return code;
     }
-
     return "Could not read code from editor.";
   } catch (error) {
     console.error("Error reading code from editor:", error);
@@ -189,13 +147,8 @@ function getCodeFromMonacoEditor() {
 function addMessageToChat(sender, message, isLoading = false) {
   const messagesContainer = document.getElementById("ai-chat-messages");
   if (!messagesContainer) return null;
-
   const messageDiv = document.createElement("div");
-  messageDiv.classList.add(
-    "ai-chat-message",
-    sender === "user" ? "user-message" : "ai-message"
-  );
-
+  messageDiv.classList.add("ai-chat-message", sender === "user" ? "user-message" : "ai-message");
   if (isLoading) {
     messageDiv.classList.add("loading");
     messageDiv.textContent = "Thinking...";
@@ -205,26 +158,17 @@ function addMessageToChat(sender, message, isLoading = false) {
       /```(java|javascript|python|c\+\+|c#|kotlin|swift)?\s*([\s\S]*?)```/g,
       "<pre><code>$2</code></pre>"
     );
-    sanitizedMessage = sanitizedMessage.replace(
-      /\*\*(.*?)\*\*/g,
-      "<strong>$1</strong>"
-    );
+    sanitizedMessage = sanitizedMessage.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
     sanitizedMessage = sanitizedMessage.replace(/\*(.*?)\*/g, "<em>$1</em>");
-    sanitizedMessage = sanitizedMessage.replace(
-      /^\s*\*\s+(.*)/gm,
-      "<ul><li>$1</li></ul>"
-    );
+    sanitizedMessage = sanitizedMessage.replace(/^\s*\*\s+(.*)/gm, "<ul><li>$1</li></ul>");
     sanitizedMessage = sanitizedMessage.replace(/<\/ul>\s*<ul>/g, "");
     const parts = sanitizedMessage.split(/(<pre>[\s\S]*?<\/pre>)/);
     const formattedParts = parts.map((part) => {
-      if (part.startsWith("<pre>")) {
-        return part;
-      }
+      if (part.startsWith("<pre>")) return part;
       return part.replace(/\n/g, "<br>");
     });
     messageDiv.innerHTML = formattedParts.join("");
   }
-
   messagesContainer.appendChild(messageDiv);
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
   return messageDiv;
@@ -235,19 +179,14 @@ async function renderReviewList() {
   if (!panel) return;
   const { reviewList } = await LocalStorage.get("reviewList");
   if (!reviewList || reviewList.length === 0) {
-    panel.innerHTML =
-      '<p style="padding: 15px;">Your review list is empty.</p>';
+    panel.innerHTML = '<p style="padding: 15px;">Your review list is empty.</p>';
     return;
   }
   const topics = {};
   reviewList.forEach((item) => {
-    if (!topics[item.concept]) {
-      topics[item.concept] = [];
-    }
+    if (!topics[item.concept]) topics[item.concept] = [];
     item.problems.forEach((problem) => {
-      if (!topics[item.concept].some((p) => p.url === problem.url)) {
-        topics[item.concept].push(problem);
-      }
+      if (!topics[item.concept].some((p) => p.url === problem.url)) topics[item.concept].push(problem);
     });
   });
   let html = "";
@@ -262,14 +201,9 @@ async function renderReviewList() {
   panel.querySelectorAll(".review-topic-header").forEach((header) => {
     header.addEventListener("click", () => {
       header.classList.toggle("active");
-      const problemList = panel.querySelector(
-        `[data-topic-list="${header.dataset.topic}"]`
-      );
-      if (problemList.style.maxHeight) {
-        problemList.style.maxHeight = null;
-      } else {
-        problemList.style.maxHeight = problemList.scrollHeight + "px";
-      }
+      const problemList = panel.querySelector(`[data-topic-list="${header.dataset.topic}"]`);
+      if (problemList.style.maxHeight) problemList.style.maxHeight = null;
+      else problemList.style.maxHeight = problemList.scrollHeight + "px";
     });
   });
   panel.querySelectorAll(".mark-done-btn").forEach((button) => {
@@ -281,9 +215,7 @@ async function renderReviewList() {
       let updatedReviewList = [];
       reviewList.forEach((item) => {
         item.problems = item.problems.filter((p) => p.url !== urlToRemove);
-        if (item.problems.length > 0) {
-          updatedReviewList.push(item);
-        }
+        if (item.problems.length > 0) updatedReviewList.push(item);
       });
       await LocalStorage.set({ reviewList: updatedReviewList });
       renderReviewList();
@@ -291,219 +223,258 @@ async function renderReviewList() {
     });
   });
 }
-// content.js — replace callGeminiAPI function with this
-async function callGeminiAPI(apiKeyIgnoredHere, requestBody) {
-  // <-- UPDATE this to your Render URL
-  const BACKEND_URL = "https://mentor-backend-drv0.onrender.com/api/generate";
 
-  const headers = { "Content-Type": "application/json" };
-
-  // Option A (quick test): hardcode the extension key (NOT for public extension)
-  // headers["x-extension-key"] = "ext_secret_abc123";
-
-  // Option B (better): try to read stored key from chrome.storage (recommended)
-  // If you saved EXTENSION_KEY in extension options, this will pick it up.
-  const storage = await LocalStorage.get("extensionKey");
-  const extKey = storage && storage.extensionKey ? storage.extensionKey : null;
-  if (extKey) headers["x-extension-key"] = extKey;
-
+async function callBackend(requestBody) {
   const resp = await fetch(BACKEND_URL, {
     method: "POST",
-    headers,
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(requestBody),
   });
-
   if (!resp.ok) {
     const txt = await resp.text();
     throw new Error(`Backend error ${resp.status}: ${txt}`);
   }
   const data = await resp.json();
-  return data.text;
+  return data.text || data;
 }
-async function getRecommendations(apiKey, problemTitle) {
+
+function extractJSONFromText(text) {
+  if (!text || typeof text !== "string") return null;
+  const jsonArrayMatch = text.match(/\[[\s\S]*\]/);
+  if (!jsonArrayMatch) return null;
+  try {
+    const parsed = JSON.parse(jsonArrayMatch[0]);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch (err) {
+    try {
+      const cleaned = jsonArrayMatch[0].replace(/,\s*]/g, "]");
+      const parsed2 = JSON.parse(cleaned);
+      return Array.isArray(parsed2) ? parsed2 : null;
+    } catch (err2) {
+      return null;
+    }
+  }
+}
+
+async function getRecommendations(problemTitle) {
   if (problemTitle === "Title not found") return;
   try {
     addMessageToChat("ai", "Analyzing problem for related topics...", true);
-    const concept = await getTopicForProblem(apiKey, problemTitle);
+    const concept = await getTopicForProblem(problemTitle);
     const recommendationPrompt = `List 2-3 classic LeetCode problems for practicing "${concept.trim()}", excluding "${problemTitle}". Provide response as a valid JSON array of objects with "title" and "url" keys. Respond with ONLY the JSON array.`;
-    const recoResponse = await callGeminiAPI(apiKey, {
-      contents: [{ parts: [{ text: recommendationPrompt }] }],
-    });
-    const jsonMatch = recoResponse.match(/\[.*\]/s);
-    if (!jsonMatch) throw new Error("Could not parse recommendation JSON.");
-    const recommendations = JSON.parse(jsonMatch[0]);
+    const recoResponse = await callBackend({ contents: [{ parts: [{ text: recommendationPrompt }] }] });
+
+    let recommendations = null;
+    if (typeof recoResponse === "string") {
+      recommendations = extractJSONFromText(recoResponse);
+    } else if (Array.isArray(recoResponse)) {
+      recommendations = recoResponse;
+    }
+
+    if (!recommendations) {
+      recommendations = [];
+      if (typeof recoResponse === "string") {
+        const lines = recoResponse.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+        for (const line of lines) {
+          const urlMatch = line.match(/(https?:\/\/[^\s)]+)/);
+          const titleCandidate = line.replace(urlMatch ? urlMatch[0] : "", "").replace(/^[\d\.\)\-]+\s*/, "").trim();
+          if (urlMatch) {
+            recommendations.push({ title: titleCandidate || urlMatch[0], url: urlMatch[0] });
+          }
+        }
+      }
+    }
+    
+    if (!Array.isArray(recommendations) || recommendations.length === 0) {
+      const loadingMessage = document.querySelector(".ai-message.loading");
+      if (loadingMessage) loadingMessage.remove();
+      addMessageToChat("ai", "I couldn't generate practice recommendations this time — try again later.");
+      return;
+    }
+
     await saveReviewItems(concept.trim(), recommendations, problemTitle);
+    const loadingMessage = document.querySelector(".ai-message.loading");
+    if (loadingMessage) loadingMessage.remove();
+    addMessageToChat("ai", `Saved ${recommendations.length} recommended problems for review.`);
   } catch (error) {
     console.error("Failed to get recommendations:", error);
-    addMessageToChat("ai", `Could not fetch recommendations. ${error.message}`);
+    const loadingMessage = document.querySelector(".ai-message.loading");
+    if (loadingMessage) loadingMessage.remove();
+    addMessageToChat("ai", "I couldn't generate practice recommendations this time — no worries, we can continue.");
   } finally {
     const loadingMessage = document.querySelector(".ai-message.loading");
     if (loadingMessage) loadingMessage.remove();
   }
 }
-async function renderAnalytics() {
-  const panel = document.getElementById("ai-analytics-panel");
-  if (!panel) return;
-  const drawUI = async () => {
-    panel.innerHTML = `<div class="analytics-section"><h2>Overall Mastery</h2><div id="mastery-chart-container"></div></div><div class="analytics-section"><h2>Skills Breakdown</h2><ul class="skills-overview-list" id="skills-overview-list"></ul></div>`;
-    const { solvedProblems } = await LocalStorage.get("solvedProblems");
-    const { reviewList } = await LocalStorage.get("reviewList");
-    const topicData = {};
-    let totalSolved = 0;
-    let totalReview = 0;
-    if (solvedProblems) {
-      solvedProblems.forEach((p) => {
-        if (!p.topic || p.topic.toLowerCase().includes("title not found"))
-          return;
-        if (!topicData[p.topic]) topicData[p.topic] = { solved: 0, review: 0 };
-        topicData[p.topic].solved++;
-      });
-    }
-    if (reviewList) {
-      reviewList.forEach((item) => {
-        const concept = item.concept;
-        if (
-          !concept ||
-          concept.toLowerCase().includes("title not found") ||
-          concept.toLowerCase().includes("since no leetcode problem")
-        )
-          return;
-        if (!topicData[concept]) topicData[concept] = { solved: 0, review: 0 };
-        topicData[concept].review += item.problems.length;
-      });
-    }
-    const overviewList = document.getElementById("skills-overview-list");
-    if (Object.keys(topicData).length === 0) {
-      overviewList.innerHTML =
-        '<p style="padding: 15px;">No data yet. Solve problems or ask for hints to build your analytics!</p>';
-      document.getElementById("mastery-chart-container").style.display = "none";
-      return;
-    }
-    const getScoreColor = (score) => {
-      const r = Math.round(255 * Math.min(2 - 2 * score, 1));
-      const g = Math.round(255 * Math.min(2 * score, 1));
-      return `rgb(${r}, ${g}, 0)`;
-    };
-    let listHtml = "";
-    for (const topic in topicData) {
-      const { solved, review } = topicData[topic];
-      totalSolved += solved;
-      totalReview += review;
-      const total = solved + review;
-      const score = total > 0 ? solved / total : 0;
-      const colorValue = getScoreColor(score);
-      let tagText = "Needs Focus";
-      if (score >= 0.4) tagText = "Developing";
-      if (score >= 0.7) tagText = "Strong";
-      if (score === 1.0) tagText = "Mastered";
-      listHtml += `<li><span>${topic}</span><span class="skill-tag" style="background-color: ${colorValue}; color: #111;">${tagText}</span></li>`;
-    }
-    overviewList.innerHTML = listHtml;
-    const overallTotal = totalSolved + totalReview;
-    const masteryScore =
-      overallTotal > 0 ? Math.round((totalSolved / overallTotal) * 100) : 0;
-    const masteryChartContainer = document.getElementById(
-      "mastery-chart-container"
-    );
-    masteryChartContainer.innerHTML = `<canvas id="masteryChart"></canvas><div id="mastery-score-text">${masteryScore}%</div>`;
-    const ctx = document.getElementById("masteryChart").getContext("2d");
-    if (myChart) myChart.destroy();
-    myChart = new Chart(ctx, {
-      type: "doughnut",
-      data: {
-        labels: ["Mastered", "Needs Practice"],
-        datasets: [
-          {
-            data: [masteryScore, 100 - masteryScore],
-            backgroundColor: ["#8a2be2", "#444"],
-            borderWidth: 0,
-          },
-        ],
-      },
-      options: {
-        responsive: true,
-        cutout: "75%",
-        plugins: { legend: { display: false }, tooltip: { enabled: false } },
-      },
-    });
-  };
-  if (window.Chart) {
-    await drawUI();
-  } else {
-    panel.innerHTML = "<p>Loading analytics library...</p>";
-    try {
-      const response = await chrome.runtime.sendMessage({
-        action: "injectChartScript",
-      });
-      if (response && response.success) {
-        await drawUI();
-      } else {
-        throw new Error("Background script failed to load Chart.js.");
-      }
-    } catch (e) {
-      console.error("Failed to load Chart.js:", e);
-      panel.innerHTML = "<p>Error: Could not load charting library.</p>";
+
+async function getTopicForProblem(problemTitle) {
+  let { topicCache } = await LocalStorage.get("topicCache");
+  topicCache = topicCache || {};
+  if (topicCache[problemTitle]) {
+    return topicCache[problemTitle];
+  }
+  const topicPrompt = `Based on the LeetCode problem title "${problemTitle}", what is the single most important data structure or algorithmic concept required? Respond with ONLY the name of the concept.`;
+  const topic = await callBackend({ contents: [{ parts: [{ text: topicPrompt }] }] });
+  const cleanTopic = (typeof topic === "string") ? topic.trim() : String(topic);
+  topicCache[problemTitle] = cleanTopic;
+  await LocalStorage.set({ topicCache });
+  return cleanTopic;
+}
+
+function isOffTopicQuery(query) {
+  if (!query || typeof query !== "string") return false;
+  const offTopicPatterns = /\b(capital of|what is happening|what's happening|who is|who's|news|today|current|weather|time in|date in|president|prime minister|capital|population|currency|latest|breaking)\b/i;
+  return offTopicPatterns.test(query);
+}
+
+function greetingOnly(q) {
+  if (!q) return false;
+  return /^\s*(hi|hello|hey|hiya|good morning|good afternoon|good evening|howdy)[.!?]?\s*$/i.test(q);
+}
+function shortHintPrompt(q) {
+  if (!q) return false;
+  // match exact phrasing from quick-action buttons or common short hint requests
+  return /^\s*(give me a small hint to get started|small hint|give me a small hint|short hint)\s*$/i.test(q);
+}
+
+function isHelpfulQuery(q) {
+  if (!q || typeof q !== "string") return false;
+  const s = q.toLowerCase();
+
+  const helpfulKeywords = [
+    "hint", "help", "explain", "explanation", "approach", "solution", "walkthrough", "walk-through",
+    "debug", "bug", "check my code", "check code", "fix", "fix my", "why is", "error", "stack", "trace",
+    "optimi",
+    "complexity", "time complexity", "space complexity",
+    "implement", "implementation", "how to", "step-by-step", "steps", "example", "test case", "test-case",
+    "edge case", "wrong answer", "wa", "runtime", "tle", "mle", "improve", "suggest", "refactor"
+  ];
+
+  for (const kw of helpfulKeywords) {
+    if (s.includes(kw)) return true;
+  }
+
+  if (/\b(can you|could you|would you|please explain|please help|show me|how do i|how to implement|what's the best way|how can i)\b/i.test(q)) {
+    return true;
+  }
+
+  return false;
+}
+
+const GENERIC_SHORT_HINTS = [
+  "Try simulating the pattern on a small example and track which row each character goes to — that usually reveals the pattern.",
+  "Think about how indices repeat across rows; identifying the cycle length helps group characters efficiently.",
+  "Consider building arrays per row and appending characters as you walk the string — it's simple and effective.",
+  "Work through the first 6–8 characters by hand and write down row numbers; you'll see the repeating pattern.",
+  "Map character indices to rows with a variable that moves up/down; that avoids complicated index math."
+];
+
+async function pickShortHint(problemTitle, inferredTopic) {
+  const candidates = GENERIC_SHORT_HINTS.slice();
+  if (inferredTopic) {
+    candidates.unshift(`Focus on the core concept: ${inferredTopic}. For a quick hint, simulate a short example and watch how indices map to rows.`);
+  }
+  const problemKey = getProblemKeyFromURL(window.location.href) || "global";
+  const lastKey = `lastShortHint_${problemKey}`;
+  let obj = await LocalStorage.get(lastKey);
+  let lastHint = obj ? obj[lastKey] : null;
+  lastHint = lastHint || null;
+
+  let pick = null;
+  for (let i = 0; i < 6; i++) {
+    const idx = Math.floor(Math.random() * candidates.length);
+    if (candidates[idx] !== lastHint) {
+      pick = candidates[idx];
+      break;
     }
   }
+  if (!pick) pick = candidates[0];
+
+  await LocalStorage.set({ [lastKey]: pick });
+  return pick;
 }
-async function getCurrentTabId() {
-  let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  return tab.id;
-}
+
 async function sendMessageToAI(userQuery) {
   if (isLoading || !userQuery) return;
+
+  if (greetingOnly(userQuery)) {
+    addMessageToChat("user", userQuery);
+    chatHistory.push({ role: "user", parts: [{ text: userQuery }] });
+
+    const greetText = "Hi! 👋 How can I help with this problem — a concise hint, the overall approach, or help debugging your code?";
+    addMessageToChat("ai", greetText);
+    chatHistory.push({ role: "model", parts: [{ text: greetText }] });
+    await saveChatHistory();
+    return;
+  }
+
+  if (shortHintPrompt(userQuery)) {
+    addMessageToChat("user", userQuery);
+    chatHistory.push({ role: "user", parts: [{ text: userQuery }] });
+
+    const ctx = getProblemContext();
+    let inferredTopic = null;
+    try {
+      inferredTopic = await getTopicForProblem(ctx.problemTitle);
+    } catch (e) {
+      console.warn("Topic inference failed for short hint:", e);
+    }
+
+    const hintText = await pickShortHint(ctx.problemTitle, inferredTopic);
+    const hintWithPrompt = `${hintText} Would you like a step-by-step hint or an example?`;
+
+    addMessageToChat("ai", hintWithPrompt);
+    chatHistory.push({ role: "model", parts: [{ text: hintWithPrompt }] });
+    await saveChatHistory();
+    return;
+  }
+  
+  if (isOffTopicQuery(userQuery)) {
+    addMessageToChat("user", userQuery);
+    addMessageToChat("ai", "Sorry — I only provide help related to the current LeetCode problem (hints, approach, debugging). I can't answer general knowledge or news questions here.");
+    return;
+  }
+
+  const helpful = isHelpfulQuery(userQuery);
+
   isLoading = true;
   let loadingMessage = null;
   try {
-    const { geminiApiKey } = await LocalStorage.get("geminiApiKey");
-    if (!geminiApiKey) {
-      addMessageToChat(
-        "ai",
-        "ERROR: API key not found. Please set it in options."
-      );
-      isLoading = false;
-      return;
-    }
     addMessageToChat("user", userQuery);
-    loadingMessage = addMessageToChat("ai", "", true);
-    const userMessageForHistory = {
-      role: "user",
-      parts: [{ text: userQuery }],
-    };
+    const userMessageForHistory = { role: "user", parts: [{ text: userQuery }] };
     chatHistory.push(userMessageForHistory);
-    let historyForAPI = [...chatHistory];
-    if (chatHistory.filter((m) => m.role === "user").length === 1) {
-      const context = getProblemContext();
-      const systemPrompt = `You are an expert LeetCode programming mentor...`;
-      const fullContextPrompt = `CONTEXT:\n- Problem: ${
-        context.problemTitle
-      }\n- Description: ${context.problemDescription}\n- My Code: ${
-        context.userCode || "None"
-      }\n\nINSTRUCTIONS:\n- ${systemPrompt}\n\nMY QUESTION:\n- "${userQuery}"`;
-      historyForAPI[historyForAPI.length - 1] = {
-        role: "user",
-        parts: [{ text: fullContextPrompt }],
-      };
+
+    const context = getProblemContext();
+
+    const systemPrompt = `You are an expert LeetCode programming mentor. Help the user solve the current LeetCode problem WITHOUT giving full code solutions. Provide hints, high-level approach steps, and Socratic questions. If the user explicitly requests a "small hint", respond with a concise, one- or two-sentence hint and then ask if they'd like more detail. If the user greets you (e.g., "hi", "hello"), reply with a friendly greeting and ask what they want help with for the current problem (hint, approach, debugging). If the user asks unrelated general-knowledge or news questions, refuse and steer them back to the problem.`;
+    const fullContextPrompt = `CONTEXT:\n- Problem: ${context.problemTitle}\n- Description: ${context.problemDescription}\n- My Code: ${context.userCode || "None"}\n\nINSTRUCTIONS:\n- ${systemPrompt}`;
+    const systemMessage = { role: "system", parts: [{ text: fullContextPrompt }] };
+
+    const historyForAPI = [systemMessage, ...chatHistory];
+
+    if (helpful) {
+      messageCounter++;
     }
-    messageCounter++;
-    const shouldRequestRecommendations = messageCounter >= 3;
+    const shouldRequestRecommendations = messageCounter >= RECOMMENDATION_THRESHOLD;
+
+    loadingMessage = addMessageToChat("ai", "", true);
     const requestBody = { contents: historyForAPI };
-    const aiResponseText = await callGeminiAPI(geminiApiKey, requestBody);
+
+    const aiResponseText = await callBackend(requestBody);
+
     if (loadingMessage) loadingMessage.remove();
     addMessageToChat("ai", aiResponseText);
+
     chatHistory.push({ role: "model", parts: [{ text: aiResponseText }] });
     await saveChatHistory();
+
     if (shouldRequestRecommendations) {
-      const context = getProblemContext();
-      await getRecommendations(geminiApiKey, context.problemTitle);
+      const ctx = getProblemContext();
+      await getRecommendations(ctx.problemTitle);
       messageCounter = 0;
     }
   } catch (error) {
-    if (
-      chatHistory.length > 0 &&
-      chatHistory[chatHistory.length - 1].role === "user"
-    )
-      chatHistory.pop();
+    if (chatHistory.length > 0 && chatHistory[chatHistory.length - 1].role === "user") chatHistory.pop();
     console.error("Error fetching AI response:", error);
     if (loadingMessage) loadingMessage.remove();
     addMessageToChat("ai", `Sorry, an error occurred. ${error.message}`);
@@ -511,20 +482,7 @@ async function sendMessageToAI(userQuery) {
     isLoading = false;
   }
 }
-function showSetupModal() {
-  if (document.getElementById("ai-setup-modal")) return;
-  const modal = document.createElement("div");
-  modal.id = "ai-setup-modal";
-  modal.innerHTML = `<h2>Welcome!</h2><p>To get started, please provide your Google Gemini API key.</p><button id="go-to-options-btn">Set Up API Key</button>`;
-  document.body.appendChild(modal);
-  document.getElementById("go-to-options-btn").addEventListener("click", () => {
-    chrome.runtime.sendMessage({ action: "openOptionsPage" });
-  });
-}
-function hideSetupModal() {
-  const modal = document.getElementById("ai-setup-modal");
-  if (modal) modal.remove();
-}
+
 function createMainButton() {
   if (document.getElementById("ai-mentor-btn")) return;
   const mentorButton = document.createElement("button");
@@ -532,36 +490,48 @@ function createMainButton() {
   mentorButton.innerHTML = `SUPPORT BOT <div class="button-icon"></div>`;
   document.body.appendChild(mentorButton);
   updateNotificationDot();
-  mentorButton.addEventListener("click", async () => {
-    const { geminiApiKey } = await LocalStorage.get("geminiApiKey");
+  mentorButton.addEventListener("click", () => {
     const chatContainer = document.getElementById("ai-chat-container");
-    if (!geminiApiKey) {
-      if (chatContainer) chatContainer.style.display = "none";
-      showSetupModal();
-    } else {
-      hideSetupModal();
-      if (!chatContainer) {
-        createChatUI();
-      } else {
-        const chatUI = document.getElementById("ai-chat-container");
-        chatUI.style.display =
-          chatUI.style.display === "none" ? "flex" : "none";
-      }
+    if (!chatContainer) createChatUI();
+    else {
+      const chatUI = document.getElementById("ai-chat-container");
+      chatUI.style.display = chatUI.style.display === "none" ? "flex" : "none";
     }
   });
 }
+
 function createChatUI() {
+  if (document.getElementById("ai-chat-container")) return;
   const chatContainer = document.createElement("div");
   chatContainer.id = "ai-chat-container";
   chatContainer.style.display = "flex";
-  chatContainer.innerHTML = `<div id="ai-chat-header">LeetCode AI Mentor</div><div id="ai-chat-tabs"><div class="ai-chat-tab active" data-tab="chat">Chat</div><div class="ai-chat-tab" data-tab="review">My Review List</div><div class="ai-chat-tab" data-tab="analytics">Analytics</div></div><div class="ai-chat-panel active" id="ai-chat-panel"><div id="ai-chat-messages"></div><div id="ai-quick-actions"><button class="quick-action-btn" data-prompt="Give me a small hint to get started">Get a Hint</button><button class="quick-action-btn" data-prompt="Explain the approach of the problem">Explain Approach</button><button class="quick-action-btn" id="clear-chat-btn">Clear Chat</button></div><div id="ai-chat-input-container"><input id="ai-chat-input" type="text" placeholder="Or type your own question..."><button id="ai-chat-send-btn">Send</button></div></div><div class="ai-chat-panel" id="ai-review-list-panel"></div><div class="ai-chat-panel" id="ai-analytics-panel"></div>`;
+  chatContainer.innerHTML = `
+    <div id="ai-chat-header">LeetCode AI Mentor</div>
+    <div id="ai-chat-tabs">
+      <div class="ai-chat-tab active" data-tab="chat">Chat</div>
+      <div class="ai-chat-tab" data-tab="review">My Review List</div>
+    </div>
+    <div class="ai-chat-panel active" id="ai-chat-panel">
+      <div id="ai-chat-messages"></div>
+      <div id="ai-quick-actions">
+        <button class="quick-action-btn" data-prompt="Give me a small hint to get started">Get a Hint</button>
+        <button class="quick-action-btn" data-prompt="Explain the approach of the problem">Explain Approach</button>
+        <button class="quick-action-btn" id="clear-chat-btn">Clear Chat</button>
+      </div>
+      <div id="ai-chat-input-container">
+        <input id="ai-chat-input" type="text" placeholder="Or type your own question...">
+        <button id="ai-chat-send-btn">Send</button>
+      </div>
+    </div>
+    <div class="ai-chat-panel" id="ai-review-list-panel"></div>
+  `;
   document.body.appendChild(chatContainer);
-  
+
   const sendButton = document.getElementById("ai-chat-send-btn");
   const input = document.getElementById("ai-chat-input");
   const header = document.getElementById("ai-chat-header");
   const clearChatBtn = document.getElementById("clear-chat-btn");
-  
+
   const handleTextInputSend = () => {
     const query = input.value.trim();
     if (query) {
@@ -570,32 +540,24 @@ function createChatUI() {
     }
   };
   sendButton.onclick = handleTextInputSend;
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") handleTextInputSend();
-  });
-  
-  // Clear Chat functionality
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") handleTextInputSend(); });
+
   clearChatBtn.addEventListener("click", () => {
     if (confirm("Clear chat history for this problem?")) {
       chatHistory = [];
       const messagesContainer = document.getElementById("ai-chat-messages");
-      if (messagesContainer) {
-        messagesContainer.innerHTML = "";
-      }
-      saveChatHistory(); // Save empty history
+      if (messagesContainer) messagesContainer.innerHTML = "";
+      saveChatHistory();
     }
   });
-  
+
   makeDraggable(chatContainer, header);
   document.querySelectorAll(".quick-action-btn").forEach((button) => {
     button.addEventListener("click", () => {
       const prompt = button.dataset.prompt;
-      if (prompt) {
-        sendMessageToAI(prompt);
-      }
+      if (prompt) sendMessageToAI(prompt);
     });
   });
-  
   const tabs = chatContainer.querySelectorAll(".ai-chat-tab");
   const panels = chatContainer.querySelectorAll(".ai-chat-panel");
   tabs.forEach((tab) => {
@@ -604,47 +566,30 @@ function createChatUI() {
       tabs.forEach((t) => t.classList.remove("active"));
       tab.classList.add("active");
       panels.forEach((p) => p.classList.remove("active"));
-      if (targetTab === "chat") {
-        document.getElementById("ai-chat-panel").classList.add("active");
-      } else if (targetTab === "review") {
-        document.getElementById("ai-review-list-panel").classList.add("active");
-        renderReviewList();
-        setNotificationStatus(false);
-      } else if (targetTab === "analytics") {
-        document.getElementById("ai-analytics-panel").classList.add("active");
-        renderAnalytics();
-      }
+      if (targetTab === "chat") document.getElementById("ai-chat-panel").classList.add("active");
+      else if (targetTab === "review") { document.getElementById("ai-review-list-panel").classList.add("active"); renderReviewList(); setNotificationStatus(false); }
     });
   });
   loadChatHistory();
 }
+
 function makeDraggable(element, handle) {
-  let pos1 = 0,
-    pos2 = 0,
-    pos3 = 0,
-    pos4 = 0;
+  let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
   handle.onmousedown = dragMouseDown;
   function dragMouseDown(e) {
     e.preventDefault();
-    pos3 = e.clientX;
-    pos4 = e.clientY;
-    document.onmouseup = closeDragElement;
-    document.onmousemove = elementDrag;
+    pos3 = e.clientX; pos4 = e.clientY;
+    document.onmouseup = closeDragElement; document.onmousemove = elementDrag;
   }
   function elementDrag(e) {
     e.preventDefault();
-    pos1 = pos3 - e.clientX;
-    pos2 = pos4 - e.clientY;
-    pos3 = e.clientX;
-    pos4 = e.clientY;
+    pos1 = pos3 - e.clientX; pos2 = pos4 - e.clientY; pos3 = e.clientX; pos4 = e.clientY;
     element.style.top = element.offsetTop - pos2 + "px";
     element.style.left = element.offsetLeft - pos1 + "px";
   }
-  function closeDragElement() {
-    document.onmouseup = null;
-    document.onmousemove = null;
-  }
+  function closeDragElement() { document.onmouseup = null; document.onmousemove = null; }
 }
+
 function resetChatState() {
   console.log("AI Mentor: Resetting in-memory chat state.");
   chatHistory = [];
@@ -652,45 +597,31 @@ function resetChatState() {
   if (messagesContainer) messagesContainer.innerHTML = "";
   uiInitialized = false;
 }
+
 async function handleSuccessfulSubmission() {
   console.log("Success detected!");
-  const { geminiApiKey } = await LocalStorage.get("geminiApiKey");
-  if (!geminiApiKey) return;
   const data = await SessionStorage.get("lastSubmittedProblem");
   const problemTitle = data ? data.lastSubmittedProblem.problemTitle : null;
-  if (!problemTitle || problemTitle === "Title not found") {
-    console.log(
-      "Skipping submission logging due to invalid title in session storage."
-    );
-    return;
-  }
+  if (!problemTitle || problemTitle === "Title not found") return;
   const { solvedProblems } = await LocalStorage.get("solvedProblems");
-  if (solvedProblems && solvedProblems.some((p) => p.title === problemTitle)) {
-    console.log("Problem already logged as solved. Skipping.");
-    return;
-  }
+  if (solvedProblems && solvedProblems.some((p) => p.title === problemTitle)) return;
   try {
-    const topic = await getTopicForProblem(geminiApiKey, problemTitle);
+    const topic = await getTopicForProblem(problemTitle);
     await saveSolvedProblem(problemTitle, topic);
   } catch (error) {
     console.error("Failed to analyze solved problem:", error);
   }
 }
+
 function addSubmitListener() {
-  const submitButton = document.querySelector(
-    'button[data-e2e-locator="submit-button"]'
-  );
+  const submitButton = document.querySelector('button[data-e2e-locator="submit-button"]');
   if (submitButton && !submitButton.dataset.listenerAttached) {
     submitButton.dataset.listenerAttached = "true";
     submitButton.addEventListener("click", () => {
       const context = getProblemContext();
       if (context.problemTitle !== "Title not found") {
-        SessionStorage.set({
-          lastSubmittedProblem: { problemTitle: context.problemTitle },
-        });
-        console.log(
-          `Submit clicked for: ${context.problemTitle}. Title saved to session.`
-        );
+        SessionStorage.set({ lastSubmittedProblem: { problemTitle: context.problemTitle } });
+        console.log(`Submit clicked for: ${context.problemTitle}. Title saved to session.`);
       }
     });
   }
@@ -706,10 +637,7 @@ const mainObserver = new MutationObserver(async () => {
       resetChatState();
       await loadChatHistory();
       if (window.location.href.includes("/submissions/detail/")) {
-        submissionObserver.observe(document.body, {
-          childList: true,
-          subtree: true,
-        });
+        submissionObserver.observe(document.body, { childList: true, subtree: true });
       }
     }
     if (!uiInitialized) {
@@ -720,32 +648,19 @@ const mainObserver = new MutationObserver(async () => {
   }
 });
 const submissionObserver = new MutationObserver(() => {
-  const successNode = document.querySelector(
-    'span[data-e2e-locator="submission-result"]'
-  );
+  const successNode = document.querySelector('span[data-e2e-locator="submission-result"]');
   if (successNode && successNode.innerText.trim() === "Accepted") {
     handleSuccessfulSubmission();
     submissionObserver.disconnect();
   }
 });
+
 console.log("AI Mentor: Starting observers...");
 mainObserver.observe(document.body, { childList: true, subtree: true });
 if (window.location.href.includes("/submissions/detail/")) {
   submissionObserver.observe(document.body, { childList: true, subtree: true });
 }
-async function getTopicForProblem(apiKey, problemTitle) {
-  let { topicCache } = await LocalStorage.get("topicCache");
-  topicCache = topicCache || {};
-  if (topicCache[problemTitle]) {
-    console.log(`Cache hit for "${problemTitle}": ${topicCache[problemTitle]}`);
-    return topicCache[problemTitle];
-  }
-  console.log(`Cache miss for "${problemTitle}". Calling API.`);
-  const topicPrompt = `Based on the LeetCode problem title "${problemTitle}", what is the single most important data structure or algorithmic concept required? Respond with ONLY the name of the concept.`;
-  const topic = await callGeminiAPI(apiKey, {
-    contents: [{ parts: [{ text: topicPrompt }] }],
-  });
-  topicCache[problemTitle] = topic.trim();
-  await LocalStorage.set({ topicCache });
-  return topic.trim();
-}
+
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === "openOptionsPage") chrome.runtime.openOptionsPage();
+});
